@@ -1,0 +1,2291 @@
+package com.slickstax841.padmap.service
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.graphics.*
+import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
+import android.view.*
+import android.widget.*
+import com.slickstax841.padmap.data.AndroidApiLevel
+import com.slickstax841.padmap.data.ButtonMode
+import com.slickstax841.padmap.data.ButtonTuningStore
+import com.slickstax841.padmap.data.DataStore
+import com.slickstax841.padmap.data.GameLayout
+import com.slickstax841.padmap.data.MappingEntry
+import com.slickstax841.padmap.data.TouchAction
+import java.util.UUID
+import kotlin.math.*
+
+class OverlayManager(private val context: Context) {
+
+    companion object {
+        var instance: OverlayManager? = null
+
+        // Packages that must never get a layout profile — Google Play Services and related
+        // system overlays that flash into the foreground briefly during app loading.
+        val BLOCKED_PACKAGES = setOf(
+            "com.google.android.gms",
+            "com.android.vending",
+            "com.google.android.gsf",
+            "com.google.android.gms.ui"
+        )
+    }
+
+    enum class State { FLOATING, CONFIG }
+    private enum class DragMode { NONE, MOVE, RESIZE, DEADZONE }
+
+    var state = State.FLOATING
+        private set
+
+    var pendingZoneId: String? = null
+        private set
+
+    // ─── Tuning box state (shared by button tuning and stick tuning) ─────────
+    private var tuneZoneId = ""   // zone ID — tuning key; stable across button reassignment
+    private var tuneDisplayLabel = "A"  // button name shown in the title bar only
+    private var stickTuneZoneId = ""
+    private var stickTuneDisplayLabel = ""
+    private var isTuningStick = false
+    private var tuningBoxView: View? = null
+    private var tuningRepeatRunnable: Runnable? = null
+
+    private val wm = context.getSystemService(WindowManager::class.java)
+    private val handler = Handler(Looper.getMainLooper())
+    private val dm = context.resources.displayMetrics
+
+    // ─── Floating icon ────────────────────────────────────────────────────────
+
+    private var iconView: View? = null
+    private val iconParams = WindowManager.LayoutParams(
+        dp(56), dp(56),
+        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+        PixelFormat.TRANSLUCENT
+    ).apply { gravity = Gravity.TOP or Gravity.START; x = -1; y = -1 }  // -1 = not yet positioned
+
+    // ─── Config overlay ───────────────────────────────────────────────────────
+
+    private var configRoot: FrameLayout? = null
+    private var zoneLayer: FrameLayout? = null
+    private var configPanel: View? = null
+    private var adjustMode = false
+    private var adjustLayer: View? = null
+    private val configParams = WindowManager.LayoutParams(
+        WindowManager.LayoutParams.MATCH_PARENT,
+        WindowManager.LayoutParams.MATCH_PARENT,
+        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        0,
+        PixelFormat.TRANSLUCENT
+    )
+
+    data class ZoneData(
+        val id: String = UUID.randomUUID().toString(),
+        var inputName: String = "",
+        var cx: Float = 0f,
+        var cy: Float = 0f,
+        var innerRadius: Float = 32f,
+        var outerRadius: Float = 120f,
+        var isStick: Boolean = false,
+        var turbo: Boolean = false,
+        var deadZone: Float = 0.15f,
+        // false = Move (position-based), true = Look/Camera (velocity/sweep-based)
+        var lookMode: Boolean = false
+    )
+
+    private val editingZones = mutableListOf<ZoneData>()
+    private var editingLayoutId = ""
+    // Package name of the game currently open in config — set on enter, cleared on exit.
+    // Exposed so the accessibility service can suppress spurious own-package a11y events
+    // during the brief window between state becoming FLOATING and the overlay being removed.
+    var configGamePackage: String = ""
+        private set
+    private val zoneViews = mutableMapOf<String, ZoneCircleView>()
+    private val contextMenuViews = mutableListOf<View>()
+    private val debugViews = mutableMapOf<String, DebugStickView>()
+    private val debugParams = mutableMapOf<String, WindowManager.LayoutParams>()
+    // Retained so showContextMenu() can re-request focus after adding clickable views
+    private var keyCatcher: KeyCatcherView? = null
+
+    // ─── Public API ───────────────────────────────────────────────────────────
+
+    val isIconVisible: Boolean get() = iconView != null
+
+    // The layout currently open in the config overlay (may not yet be the active layout)
+    val editingLayout: com.slickstax841.padmap.data.GameLayout?
+        get() = DataStore.data.value.gameLayouts.find { it.id == editingLayoutId }
+
+    fun startService() { handler.post { showFloatingIcon() } }
+
+    // Re-show the floating icon from the PadMap app after it's been hidden or closed
+    fun restartIcon() {
+        handler.post {
+            iconView?.visibility = View.VISIBLE  // restore if hidden by isSystemUi
+            showFloatingIcon()                    // create if it doesn't exist yet
+        }
+    }
+
+    // Move icon to title-row position (PadMap app is foreground)
+    fun repositionForHome() {
+        handler.post {
+            val view = iconView ?: return@post
+            view.visibility = View.VISIBLE  // restore if hidden by isSystemUi
+            val screenW = dm.widthPixels
+            val statusBarId = context.resources.getIdentifier("status_bar_height", "dimen", "android")
+            val statusBarH = if (statusBarId > 0) context.resources.getDimensionPixelSize(statusBarId) else dp(24)
+            iconParams.x = screenW / 2 - dp(28)
+            iconParams.y = statusBarH + dp(20)
+            runCatching { wm.updateViewLayout(view, iconParams) }
+        }
+    }
+
+    // Move icon to top-center (game is foreground); re-assert config overlay focus if open.
+    // Hides the icon when pkg is a system/Android screen (launcher, Settings, etc.).
+    fun repositionForGame(pkg: String) {
+        handler.post {
+            if (state == State.CONFIG) {
+                // Config overlay is open — re-assert it so the game window can't steal focus/touch
+                configRoot?.let { runCatching { wm.updateViewLayout(it, configParams) } }
+                keyCatcher?.requestFocus()
+                return@post
+            }
+            val view = iconView ?: return@post
+            if (isSystemUi(pkg)) {
+                view.visibility = View.GONE
+                return@post
+            }
+            view.visibility = View.VISIBLE
+            val screenW = dm.widthPixels
+            val statusBarId = context.resources.getIdentifier("status_bar_height", "dimen", "android")
+            val statusBarH = if (statusBarId > 0) context.resources.getDimensionPixelSize(statusBarId) else dp(24)
+            iconParams.x = screenW / 2 - dp(28)
+            iconParams.y = statusBarH + dp(4)
+            runCatching { wm.updateViewLayout(view, iconParams) }
+        }
+    }
+
+    // Returns true for the home launcher and any system-partition app (Settings, file managers, etc.)
+    private fun isSystemUi(pkg: String): Boolean {
+        if (isSystemLauncher(pkg)) return true
+        return try {
+            val flags = context.packageManager.getApplicationInfo(pkg, 0).flags
+            flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0
+        } catch (e: Exception) { false }
+    }
+
+    // Open config overlay directly from HomeScreen — uses last known foreground package
+    fun openConfigDirect() { handler.post { enterConfigModeFromIcon() } }
+
+    fun detach() { handler.post { removeIcon(); removeConfig(); removeAllDebugViews() } }
+
+    fun showToast(msg: String) {
+        handler.post { Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
+    }
+
+    // Called from GameLayoutScreen "Configure Zones" button (manual path)
+    fun startConfigOverlay(layoutId: String) {
+        handler.post {
+            loadLayout(layoutId)
+            enterConfigMode()
+        }
+    }
+
+    // Assign pending zone to a controller input. Called from the service.
+    fun assignPendingZone(inputName: String, isStick: Boolean) {
+        val id = pendingZoneId ?: return
+        val zone = editingZones.find { it.id == id } ?: return
+
+        // Sticks: only 1 zone allowed per stick label
+        if (isStick) {
+            val alreadyUsed = editingZones.any { it.id != id && it.isStick && it.inputName == inputName }
+            if (alreadyUsed) {
+                showToast("$inputName is already mapped to a zone")
+                editingZones.removeAll { it.id == id }
+                pendingZoneId = null
+                handler.post { rebuildZoneLayer() }
+                return
+            }
+        }
+
+        // If zone was previously a stick with a different label, remove its debug overlay.
+        if (zone.isStick && zone.inputName.isNotBlank() && zone.inputName != inputName)
+            hideDebugOverlay(zone.inputName)
+        zone.inputName = inputName
+        zone.isStick = isStick
+        if (inputName == "LT" || inputName == "RT") ButtonTuningStore.initForTrigger(zone.id)
+        pendingZoneId = null
+        handler.post {
+            rebuildZoneLayer()
+            // Show the option buttons immediately so the user can configure the
+            // zone (Move/Look/Turbo/Delete) without needing to tap it again.
+            showContextMenu(zone)
+        }
+    }
+
+    // ─── Floating icon ────────────────────────────────────────────────────────
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun showFloatingIcon() {
+        if (iconView != null) return
+        // First-time position: centered horizontally, in the app title row
+        if (iconParams.x < 0) {
+            val statusBarId = context.resources.getIdentifier("status_bar_height", "dimen", "android")
+            val statusBarH = if (statusBarId > 0) context.resources.getDimensionPixelSize(statusBarId) else dp(24)
+            iconParams.x = dm.widthPixels / 2 - dp(28)
+            iconParams.y = statusBarH + dp(20)
+        }
+        val view = TextView(context).apply {
+            text = "\u25CE"
+            textSize = 22f
+            setTextColor(Color.parseColor("#00BFFF"))
+            gravity = Gravity.CENTER
+            alpha = 0.5f
+            background = circleDrawable(Color.argb(160, 0, 0, 0), Color.parseColor("#00BFFF"))
+        }
+        var ix = 0; var iy = 0; var tx = 0f; var ty = 0f; var moved = false
+        view.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> { ix = iconParams.x; iy = iconParams.y; tx = e.rawX; ty = e.rawY; moved = false; true }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (e.rawX - tx).toInt(); val dy = (e.rawY - ty).toInt()
+                    if (abs(dx) > 8 || abs(dy) > 8) { moved = true; view.alpha = 0.95f }
+                    iconParams.x = ix + dx; iconParams.y = iy + dy
+                    iconView?.let { runCatching { wm.updateViewLayout(it, iconParams) } }
+                    true
+                }
+                MotionEvent.ACTION_UP -> { view.alpha = 0.5f; if (!moved) enterConfigModeFromIcon(); true }
+                else -> false
+            }
+        }
+        iconView = view
+        try {
+            wm.addView(view, iconParams)
+        } catch (e: Exception) {
+            iconView = null
+            showToast("Could not show overlay icon: ${e.message}")
+        }
+    }
+
+    private fun removeIcon() { iconView?.let { runCatching { wm.removeView(it) } }; iconView = null }
+
+    // ─── Config mode ──────────────────────────────────────────────────────────
+
+    private fun isSystemLauncher(pkg: String): Boolean {
+        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+            addCategory(android.content.Intent.CATEGORY_HOME)
+        }
+        return context.packageManager.queryIntentActivities(intent, 0)
+            .any { it.activityInfo.packageName == pkg }
+    }
+
+    private fun isMappablePackage(pkg: String): Boolean {
+        if (pkg.isBlank()) return false
+        if (pkg == context.packageName) return false
+        if (pkg in BLOCKED_PACKAGES) return false
+        if (isSystemLauncher(pkg)) return false
+        return true
+    }
+
+    // Icon tap path — auto-detect the current game
+    private fun enterConfigModeFromIcon() {
+        val svc = PadMapAccessibilityService.instance
+        // foregroundPackage is always a real game package (never our own — we skip our own
+        // package in onAccessibilityEvent). Fall back to lastGamePackage if the game hasn't
+        // fired a window event yet since the service started.
+        val pkg = svc?.foregroundPackage
+            ?.takeIf { isMappablePackage(it) }
+            ?: svc?.lastGamePackage?.takeIf { isMappablePackage(it) }
+            ?: ""
+        // Block if no game is open yet (blank) or if foreground is a non-game package (GMS, launcher)
+        if (pkg.isBlank()) {
+            showToast("Switch to a game first, then tap the config button")
+            return
+        }
+        if (pkg.isNotBlank()) {
+            val appName = runCatching {
+                val ai = context.packageManager.getApplicationInfo(pkg, 0)
+                context.packageManager.getApplicationLabel(ai).toString()
+            }.getOrDefault(pkg)
+
+            configGamePackage = pkg  // capture now — no DataStore lookup needed at exit time
+            val data = DataStore.data.value
+            val existing = data.gameLayouts.find { it.packageName == pkg }
+            if (existing != null) {
+                loadLayout(existing.id)
+            } else {
+                val newId = UUID.randomUUID().toString()
+                val newLayout = GameLayout(
+                    id = newId,
+                    name = appName,
+                    packageName = pkg,
+                    controllerPresetId = data.activePresetId
+                )
+                DataStore.update { it.copy(gameLayouts = it.gameLayouts + newLayout) }
+                editingLayoutId = newId
+                editingZones.clear()
+            }
+        }
+        enterConfigMode()
+    }
+
+    private fun loadLayout(layoutId: String) {
+        editingLayoutId = layoutId
+        editingZones.clear()
+        // Keep configGamePackage in sync when opening via startConfigOverlay (GameLayoutScreen path)
+        val layoutPkg = DataStore.data.value.gameLayouts.find { it.id == layoutId }?.packageName ?: ""
+        if (layoutPkg.isNotBlank()) configGamePackage = layoutPkg
+        DataStore.data.value.gameLayouts.find { it.id == layoutId }?.mappings?.forEach { entry ->
+            // Preserve the saved zone ID so tuning keyed by that ID survives save/load cycles.
+            // Blank zoneId means this entry was saved before zone-based tuning was introduced.
+            val zid = entry.zoneId.ifBlank { UUID.randomUUID().toString() }
+            when (val a = entry.action) {
+                is TouchAction.Tap ->
+                    editingZones.add(ZoneData(id = zid, inputName = entry.inputName, cx = a.x, cy = a.y, isStick = false, turbo = entry.turbo))
+                is TouchAction.Drag ->
+                    editingZones.add(ZoneData(id = zid, inputName = entry.inputName, cx = a.centerX, cy = a.centerY, innerRadius = 50f, outerRadius = a.radius, isStick = true, turbo = false, deadZone = a.deadZone, lookMode = a.lookMode))
+            }
+            if (entry.inputName == "LT" || entry.inputName == "RT")
+                ButtonTuningStore.initForTrigger(zid)
+        }
+    }
+
+    private fun enterConfigMode() {
+        state = State.CONFIG
+        iconView?.visibility = View.GONE
+        buildConfigOverlay()
+        PadMapAccessibilityService.instance?.updateInputInterception()
+    }
+
+    private fun exitConfigMode() {
+        // configGamePackage was set when config was opened — no DataStore lookup needed
+        // and no timing race with async DataStore.update for newly created layouts.
+        val gamePackage = configGamePackage
+
+        state = State.FLOATING
+        pendingZoneId = null
+
+        // Defer WindowManager removal to the next looper iteration so we are not tearing
+        // down the view hierarchy while still inside an active touch-dispatch chain.
+        // configGamePackage stays non-blank until cleared here, which keeps the a11y guard
+        // active for this one tick so the overlay can't overwrite foregroundPackage.
+        handler.post {
+            removeConfig()
+            iconView?.visibility = View.VISIBLE
+            PadMapAccessibilityService.instance?.restoreGamePackage(gamePackage)
+            PadMapAccessibilityService.instance?.updateInputInterception()
+            configGamePackage = ""  // guard window closed — normal a11y tracking resumes
+        }
+    }
+
+    private fun closeAndDisableIcon() {
+        state = State.FLOATING
+        pendingZoneId = null
+        removeConfig()
+        removeIcon()
+        showToast("Open PadMap to show the config button again")
+    }
+
+    // ─── Config overlay build ─────────────────────────────────────────────────
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun buildConfigOverlay() {
+        removeConfig()
+        zoneViews.clear()
+        contextMenuViews.clear()
+
+        val root = FrameLayout(context)
+        root.setBackgroundColor(Color.argb(80, 0, 160, 255))  // light blue tint
+        // Consume window insets so Android does not automatically shrink the view
+        // content away from nav bar areas — the overlay must fill its full window area.
+        root.setOnApplyWindowInsetsListener { _, insets -> insets }
+
+        val zones = FrameLayout(context)
+        zoneLayer = zones
+
+        editingZones.forEach { addZoneView(zones, it) }
+
+        // Tapping empty space: create new zone or dismiss context menu
+        zones.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> true  // must consume DOWN to receive UP
+                MotionEvent.ACTION_UP -> {
+                    val menuWasVisible = contextMenuViews.isNotEmpty()
+                    if (menuWasVisible) {
+                        dismissContextMenu()
+                    } else {
+                        val hitExisting = editingZones.any { z ->
+                            val dx = e.x - z.cx; val dy = e.y - z.cy
+                            sqrt(dx * dx + dy * dy) < (if (z.isStick && z.inputName.isNotBlank()) z.outerRadius else z.innerRadius) + dp(20)
+                        }
+                        val hasUnassigned = editingZones.any { it.inputName.isBlank() }
+                        if (!hitExisting && !hasUnassigned) createZone(e.x, e.y)
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        root.addView(zones, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+
+        // Floating control panel — starts centred, draggable with no hold delay
+        val panel = buildTopPanel()
+        configPanel = panel
+        val panelLp = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.CENTER
+        )
+        root.addView(panel, panelLp)
+        // After layout, switch to margin-based positioning so drag works correctly.
+        // Restore saved position if the user has moved the panel before; otherwise centre it.
+        panel.post {
+            val lp = panel.layoutParams as FrameLayout.LayoutParams
+            lp.gravity = Gravity.TOP or Gravity.START
+            val saved = DataStore.data.value
+            lp.leftMargin = saved.panelX ?: ((root.width  - panel.width)  / 2)
+            lp.topMargin  = saved.panelY ?: ((root.height - panel.height) / 2)
+            panel.layoutParams = lp
+        }
+        val dragStart = floatArrayOf(0f, 0f)
+        val panelOrigin = intArrayOf(0, 0)
+        var dragging = false
+        // Returns true if (px, py) — relative to vg — lands on a clickable descendant
+        fun hasClickableAt(vg: android.view.ViewGroup, px: Int, py: Int): Boolean {
+            for (i in vg.childCount - 1 downTo 0) {
+                val child = vg.getChildAt(i)
+                if (px in child.left..child.right && py in child.top..child.bottom) {
+                    if (child.isClickable) return true
+                    if (child is android.view.ViewGroup)
+                        return hasClickableAt(child, px - child.left, py - child.top)
+                    return false
+                }
+            }
+            return false
+        }
+        panel.setOnTouchListener { v, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    // If the finger is on a clickable button let it handle the touch normally
+                    val hitButton = (v as? android.view.ViewGroup)
+                        ?.let { hasClickableAt(it, e.x.toInt(), e.y.toInt()) } ?: false
+                    if (hitButton) {
+                        dragging = false
+                        false  // pass through to child
+                    } else {
+                        // Touch landed on non-interactive area — capture for drag
+                        dragging = true
+                        dragStart[0] = e.rawX; dragStart[1] = e.rawY
+                        val lp = v.layoutParams as FrameLayout.LayoutParams
+                        panelOrigin[0] = lp.leftMargin; panelOrigin[1] = lp.topMargin
+                        true
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!dragging) return@setOnTouchListener false
+                    val lp = v.layoutParams as FrameLayout.LayoutParams
+                    lp.leftMargin = (panelOrigin[0] + (e.rawX - dragStart[0])).toInt()
+                    lp.topMargin  = (panelOrigin[1] + (e.rawY - dragStart[1])).toInt()
+                    v.layoutParams = lp
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!dragging) return@setOnTouchListener false
+                    dragging = false
+                    // Persist the new panel position
+                    val lp = v.layoutParams as FrameLayout.LayoutParams
+                    DataStore.update { it.copy(panelX = lp.leftMargin, panelY = lp.topMargin) }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        // Hidden focusable view that receives gamepad key/axis events directly from the window
+        val catcher = KeyCatcherView(context,
+            onButton = { handleButtonAssignment(it) },
+            onAxis = { code, value -> handleAxisAssignment(code, value) }
+        )
+        keyCatcher = catcher
+        root.addView(catcher, FrameLayout.LayoutParams(1, 1))
+
+        // Apply saved overlay position/size if the user has previously adjusted it.
+        // Reset to defaults first so a fresh session doesn't inherit stale values.
+        val savedOverlay = DataStore.data.value
+        if (savedOverlay.overlayX != null) {
+            configParams.gravity = Gravity.TOP or Gravity.START
+            configParams.flags   = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                                   WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            configParams.width   = savedOverlay.overlayW ?: dm.widthPixels
+            configParams.height  = savedOverlay.overlayH ?: dm.heightPixels
+            configParams.x       = savedOverlay.overlayX
+            configParams.y       = savedOverlay.overlayY ?: 0
+        } else {
+            configParams.gravity = 0
+            configParams.flags   = 0
+            configParams.width   = WindowManager.LayoutParams.MATCH_PARENT
+            configParams.height  = WindowManager.LayoutParams.MATCH_PARENT
+            configParams.x       = 0
+            configParams.y       = 0
+        }
+
+        configRoot = root
+        try {
+            wm.addView(root, configParams)
+            root.post { catcher.requestFocus() }
+        } catch (e: Exception) {
+            configRoot = null
+            showToast("Could not show config overlay: ${e.message}")
+        }
+    }
+
+    private fun buildTopPanel(): View {
+        val layoutObj = DataStore.data.value.gameLayouts.find { it.id == editingLayoutId }
+        val preset = DataStore.data.value.controllerPresets.find { it.id == layoutObj?.controllerPresetId }
+
+        // Compact vertical card — centred on screen, draggable from the title area
+        val panel = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            minimumWidth = dp(200)
+            background = GradientDrawable().apply {
+                setColor(Color.argb(166, 0, 0, 0))
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(1), Color.parseColor("#00BFFF"))
+            }
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            elevation = 12f
+        }
+
+        // Game icon + name row (non-clickable — acts as drag handle)
+        val nameRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val pkg = layoutObj?.packageName ?: ""
+        if (pkg.isNotBlank()) {
+            runCatching {
+                val icon = context.packageManager.getApplicationIcon(pkg)
+                val iconSize = dp(24)
+                nameRow.addView(ImageView(context).apply {
+                    setImageDrawable(icon)
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    layoutParams = LinearLayout.LayoutParams(iconSize, iconSize).apply {
+                        marginEnd = dp(8)
+                    }
+                })
+            }
+        }
+        nameRow.addView(TextView(context).apply {
+            text = layoutObj?.name ?: "Unknown game"
+            textSize = 12f
+            setTextColor(Color.parseColor("#00BFFF"))
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        // CLOSE — top right, opposite the game title
+        nameRow.addView(TextView(context).apply {
+            text = "\u2715"
+            textSize = 13f
+            setTextColor(Color.parseColor("#888888"))
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            setOnClickListener { closeAndDisableIcon() }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = dp(8) }
+        })
+        panel.addView(nameRow)
+        if (preset != null) {
+            panel.addView(TextView(context).apply {
+                text = preset.name
+                textSize = 10f
+                setTextColor(Color.parseColor("#666666"))
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+        }
+
+        panel.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(1, dp(8)) })
+
+        // Button row
+        val btnRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        // ADJUST — overlay positioning tool
+        btnRow.addView(AdjustIcon(context).apply {
+            setOnClickListener { enterAdjustMode() }
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+        })
+        btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+        // CLEAR
+        btnRow.addView(TextView(context).apply {
+            text = "CLEAR"
+            textSize = 11f
+            setTextColor(Color.parseColor("#CC3333"))
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            background = outlineDrawable(Color.parseColor("#CC3333"))
+            setOnClickListener { clearAllZones() }
+        })
+        btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(dp(6), 1) })
+        // SAVE
+        btnRow.addView(TextView(context).apply {
+            text = "SAVE"
+            textSize = 11f
+            setTextColor(Color.BLACK)
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#00BFFF"))
+                cornerRadius = dp(5).toFloat()
+            }
+            setOnClickListener { saveAndExit() }
+        })
+
+        panel.addView(btnRow)
+        return panel
+    }
+
+    // ─── Zone management ──────────────────────────────────────────────────────
+
+    private fun addZoneView(parent: FrameLayout, zone: ZoneData) {
+        val v = ZoneCircleView(context, zone) { z -> showContextMenu(z) }
+        zoneViews[zone.id] = v
+        val size = viewSizeForZone(zone)
+        parent.addView(v, FrameLayout.LayoutParams(size, size).apply {
+            leftMargin = (zone.cx - size / 2f).toInt()
+            topMargin = (zone.cy - size / 2f).toInt()
+        })
+    }
+
+    private fun createZone(x: Float, y: Float) {
+        val zone = ZoneData(cx = x, cy = y)
+        editingZones.add(zone)
+        pendingZoneId = zone.id
+        zoneLayer?.let { addZoneView(it, zone) }
+        keyCatcher?.requestFocus()
+    }
+
+    private fun clearAllZones() {
+        editingZones.clear()
+        pendingZoneId = null
+        dismissContextMenu()
+        rebuildZoneLayer()
+    }
+
+    private fun rebuildZoneLayer() {
+        dismissContextMenu()
+        val layer = zoneLayer ?: return
+        layer.removeAllViews()
+        zoneViews.clear()
+        editingZones.forEach { addZoneView(layer, it) }
+    }
+
+    private fun saveAndExit() {
+        val mappings = editingZones.filter { it.inputName.isNotBlank() }.map { zone ->
+            MappingEntry(
+                inputName = zone.inputName,
+                action = if (zone.isStick)
+                    TouchAction.Drag(zone.cx, zone.cy, zone.outerRadius, zone.deadZone, zone.lookMode)
+                else
+                    TouchAction.Tap(zone.cx, zone.cy),
+                turbo = zone.turbo,
+                zoneId = zone.id
+            )
+        }
+        DataStore.update { data ->
+            val updatedLayouts = if (data.gameLayouts.any { it.id == editingLayoutId }) {
+                // Normal path: layout exists, update its mappings in-place.
+                data.gameLayouts.map {
+                    if (it.id == editingLayoutId) it.copy(mappings = mappings) else it
+                }
+            } else {
+                // Safety net: layout was dropped from in-memory state (e.g. DataStore race
+                // at service startup overwrote the entry added in enterConfigModeFromIcon).
+                // Re-add it rather than silently discarding the user's work.
+                data.gameLayouts + GameLayout(
+                    id = editingLayoutId,
+                    packageName = configGamePackage,
+                    name = configGamePackage,
+                    controllerPresetId = data.activePresetId,
+                    mappings = mappings
+                )
+            }
+            data.copy(activeLayoutId = editingLayoutId, gameLayouts = updatedLayouts)
+        }
+        exitConfigMode()
+    }
+
+    // ─── Overlay adjust mode ──────────────────────────────────────────────────
+
+    private fun enterAdjustMode() {
+        if (adjustMode) return
+        adjustMode = true
+        val root = configRoot ?: return
+        // Amber tint with blue border — user can see the overlay edges before tapping DONE
+        root.background = GradientDrawable().apply {
+            setColor(Color.argb(120, 255, 140, 0))
+            setStroke(dp(2), Color.parseColor("#0080FF"))
+        }
+        // Switch window to explicit pixel positioning so it can be dragged/resized.
+        // FLAG_LAYOUT_NO_LIMITS lets the user push the overlay past the screen edges
+        // if the device clips zones that should be reachable.
+        val saved = DataStore.data.value
+        configParams.gravity = Gravity.TOP or Gravity.START
+        configParams.flags   = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                               WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        configParams.width   = saved.overlayW ?: dm.widthPixels
+        configParams.height  = saved.overlayH ?: dm.heightPixels
+        configParams.x       = saved.overlayX ?: 0
+        configParams.y       = saved.overlayY ?: 0
+        runCatching { wm.updateViewLayout(root, configParams) }
+        configPanel?.visibility = View.GONE
+        showAdjustLayer(root)
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun showAdjustLayer(root: FrameLayout) {
+        var dragStartRawX = 0f; var dragStartRawY = 0f
+        var winStartX = 0; var winStartY = 0
+        var resizeStartRawX = 0f; var resizeStartRawY = 0f
+        var winStartW = 0; var winStartH = 0
+        // per-edge drag state: [startRaw], [startParam1, startParam2?]
+        val topRaw = floatArrayOf(0f);   val topP  = intArrayOf(0, 0)
+        val botRaw = floatArrayOf(0f);   val botP  = intArrayOf(0)
+        val lefRaw = floatArrayOf(0f);   val lefP  = intArrayOf(0, 0)
+        val rigRaw = floatArrayOf(0f);   val rigP  = intArrayOf(0)
+
+        // Minimum overlay size is double the panel size so there is always room to work.
+        fun minW() = ((configPanel?.width  ?: 0) + dp(40)) * 2
+        fun minH() = ((configPanel?.height ?: 0) + dp(40)) * 2
+
+        // Custom FrameLayout: background touches handle whole-window drag;
+        // edge handles and Save button consume their own touches first.
+        val layer = object : FrameLayout(context) {
+            override fun onTouchEvent(e: MotionEvent): Boolean {
+                when (e.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        dragStartRawX = e.rawX; dragStartRawY = e.rawY
+                        winStartX = configParams.x; winStartY = configParams.y
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        configParams.x = winStartX + (e.rawX - dragStartRawX).toInt()
+                        configParams.y = winStartY + (e.rawY - dragStartRawY).toInt()
+                        runCatching { wm.updateViewLayout(configRoot, configParams) }
+                        return true
+                    }
+                    MotionEvent.ACTION_UP -> return true
+                }
+                return false
+            }
+        }
+
+        // Instruction label — centred, slightly above the Save button
+        layer.addView(TextView(context).apply {
+            text = "DRAG BACKGROUND TO MOVE \u2022 DRAG EDGES TO RESIZE"
+            textSize = 11f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                setColor(Color.argb(160, 0, 0, 0))
+                cornerRadius = dp(6).toFloat()
+            }
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+        }, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.CENTER_HORIZONTAL or Gravity.CENTER_VERTICAL
+        ).apply { bottomMargin = dp(52) })
+
+        // Save button — direct child of layer so it always receives touches correctly
+        layer.addView(TextView(context).apply {
+            text = "Save"
+            textSize = 13f
+            setTextColor(Color.BLACK)
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(12), dp(24), dp(12))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#00BFFF"))
+                cornerRadius = dp(8).toFloat()
+            }
+            setOnClickListener { exitAdjustMode() }
+        }, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.CENTER_HORIZONTAL or Gravity.CENTER_VERTICAL
+        ).apply { topMargin = dp(52) })
+
+        // Returns a wide flat filled-triangle arrow View for the given edge.
+        // direction: 0=UP(top edge)  1=DOWN(bottom edge)  2=LEFT  3=RIGHT
+        fun arrowView(direction: Int, wDp: Int, hDp: Int): View =
+            object : View(context) {
+                private val arrowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.parseColor("#00BFFF")
+                    style = android.graphics.Paint.Style.FILL
+                }
+                override fun onDraw(canvas: android.graphics.Canvas) {
+                    val w = width.toFloat(); val h = height.toFloat()
+                    val path = android.graphics.Path()
+                    when (direction) {
+                        0 -> { path.moveTo(w / 2f, 0f); path.lineTo(w, h); path.lineTo(0f, h) }
+                        1 -> { path.moveTo(0f, 0f);     path.lineTo(w, 0f); path.lineTo(w / 2f, h) }
+                        2 -> { path.moveTo(0f, h / 2f); path.lineTo(w, 0f); path.lineTo(w, h) }
+                        3 -> { path.moveTo(w, h / 2f);  path.lineTo(0f, 0f); path.lineTo(0f, h) }
+                    }
+                    path.close()
+                    canvas.drawPath(path, arrowPaint)
+                }
+            }.apply {
+                minimumWidth = dp(wDp); minimumHeight = dp(hDp)
+                setWillNotDraw(false)
+            }
+
+        // ── TOP edge handle — wide flat arrow pointing UP, moves top edge ────
+        val topArrow = arrowView(0, 80, 30)
+        topArrow.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    topRaw[0] = e.rawY
+                    topP[0]   = configParams.y
+                    topP[1]   = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val delta  = (e.rawY - topRaw[0]).toInt()
+                    val newH   = (topP[1] - delta).coerceAtLeast(minH())
+                    val actual = topP[1] - newH
+                    configParams.y      = topP[0] + actual
+                    configParams.height = newH
+                    runCatching { wm.updateViewLayout(configRoot, configParams) }
+                    true
+                }
+                MotionEvent.ACTION_UP -> true
+                else -> false
+            }
+        }
+        layer.addView(topArrow, FrameLayout.LayoutParams(dp(80), dp(30), Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+            .apply { topMargin = dp(20) })
+
+        // ── BOTTOM edge handle — wide flat arrow pointing DOWN ────────────────
+        val botArrow = arrowView(1, 80, 30)
+        botArrow.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    botRaw[0] = e.rawY
+                    botP[0]   = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val delta = (e.rawY - botRaw[0]).toInt()
+                    configParams.height = (botP[0] + delta).coerceAtLeast(minH())
+                    runCatching { wm.updateViewLayout(configRoot, configParams) }
+                    true
+                }
+                MotionEvent.ACTION_UP -> true
+                else -> false
+            }
+        }
+        layer.addView(botArrow, FrameLayout.LayoutParams(dp(80), dp(30), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
+            .apply { bottomMargin = dp(20) })
+
+        // ── LEFT edge handle — wide flat arrow pointing LEFT ──────────────────
+        val lefArrow = arrowView(2, 30, 80)
+        lefArrow.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    lefRaw[0] = e.rawX
+                    lefP[0]   = configParams.x
+                    lefP[1]   = configParams.width.takeIf { it > 0 } ?: dm.widthPixels
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val delta  = (e.rawX - lefRaw[0]).toInt()
+                    val newW   = (lefP[1] - delta).coerceAtLeast(minW())
+                    val actual = lefP[1] - newW
+                    configParams.x     = lefP[0] + actual
+                    configParams.width = newW
+                    runCatching { wm.updateViewLayout(configRoot, configParams) }
+                    true
+                }
+                MotionEvent.ACTION_UP -> true
+                else -> false
+            }
+        }
+        layer.addView(lefArrow, FrameLayout.LayoutParams(dp(30), dp(80), Gravity.START or Gravity.CENTER_VERTICAL)
+            .apply { marginStart = dp(20) })
+
+        // ── RIGHT edge handle — wide flat arrow pointing RIGHT ────────────────
+        val rigArrow = arrowView(3, 30, 80)
+        rigArrow.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    rigRaw[0] = e.rawX
+                    rigP[0]   = configParams.width.takeIf { it > 0 } ?: dm.widthPixels
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val delta = (e.rawX - rigRaw[0]).toInt()
+                    configParams.width = (rigP[0] + delta).coerceAtLeast(minW())
+                    runCatching { wm.updateViewLayout(configRoot, configParams) }
+                    true
+                }
+                MotionEvent.ACTION_UP -> true
+                else -> false
+            }
+        }
+        layer.addView(rigArrow, FrameLayout.LayoutParams(dp(30), dp(80), Gravity.END or Gravity.CENTER_VERTICAL)
+            .apply { marginEnd = dp(20) })
+
+        // Corner resize handle — bottom-right (diagonal convenience)
+        layer.addView(TextView(context).apply {
+            text = "\u25E2"
+            textSize = 28f
+            setTextColor(Color.WHITE)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setOnTouchListener { _, e ->
+                when (e.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        resizeStartRawX = e.rawX; resizeStartRawY = e.rawY
+                        winStartW = configParams.width.takeIf  { it > 0 } ?: dm.widthPixels
+                        winStartH = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        configParams.width  = (winStartW + (e.rawX - resizeStartRawX).toInt()).coerceAtLeast(minW())
+                        configParams.height = (winStartH + (e.rawY - resizeStartRawY).toInt()).coerceAtLeast(minH())
+                        runCatching { wm.updateViewLayout(configRoot, configParams) }
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> true
+                    else -> false
+                }
+            }
+        }, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.END
+        ).apply { bottomMargin = dp(36); marginEnd = dp(36) })
+
+        adjustLayer = layer
+        root.addView(layer, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+    }
+
+    private fun exitAdjustMode() {
+        adjustMode = false
+        val root = configRoot ?: return
+        // Save the current window position and size
+        DataStore.update { it.copy(
+            overlayX = configParams.x,
+            overlayY = configParams.y,
+            overlayW = configParams.width,
+            overlayH = configParams.height
+        )}
+        // Remove the adjust layer
+        adjustLayer?.let { root.removeView(it) }
+        adjustLayer = null
+        // Restore normal config tint
+        root.setBackgroundColor(Color.argb(80, 0, 160, 255))
+        // Show the panel again, centred on the new overlay dimensions
+        val panel = configPanel ?: return
+        panel.visibility = View.VISIBLE
+        panel.post {
+            val lp = panel.layoutParams as? FrameLayout.LayoutParams ?: return@post
+            lp.gravity = Gravity.TOP or Gravity.START
+            lp.leftMargin = (configParams.width  - panel.width)  / 2
+            lp.topMargin  = (configParams.height - panel.height) / 2
+            panel.layoutParams = lp
+            // Persist the new centred position so it's restored next session
+            DataStore.update { it.copy(panelX = lp.leftMargin, panelY = lp.topMargin) }
+        }
+    }
+
+    private fun removeConfig() {
+        configRoot?.let { runCatching { wm.removeView(it) } }
+        configRoot = null; zoneLayer = null; zoneViews.clear(); contextMenuViews.clear()
+        keyCatcher = null; adjustLayer = null; adjustMode = false; configPanel = null
+    }
+
+    // ─── Context menu (tap on assigned zone) ─────────────────────────────────
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun showContextMenu(zone: ZoneData) {
+        dismissContextMenu()
+        // Make this zone live for reassignment — pressing any button/stick while the
+        // context menu is open will reassign the zone to the new input.
+        pendingZoneId = zone.id
+        val screenW = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels).toFloat()
+        val screenH = (configRoot?.height?.takeIf { it > 0 } ?: dm.heightPixels).toFloat()
+
+        // Determine which screen quadrant has the most open space
+        val goRight = (screenW - zone.cx) > zone.cx
+        val goDown  = (screenH - zone.cy) > zone.cy
+        val baseAngleDeg = when {
+            goRight && goDown  -> 45.0
+            !goRight && goDown -> 135.0
+            goRight && !goDown -> 315.0
+            else               -> 225.0
+        }
+
+        val zoneR = if (zone.isStick && zone.inputName.isNotBlank()) zone.outerRadius else zone.innerRadius
+        val btnR = dp(18).toFloat()
+        val placementR = zoneR + dp(32) + btnR
+
+        // null onClick = drag handle (gets a touch listener instead of click listener)
+        data class BtnSpec(val icon: String, val bgColor: Int, val onClick: (() -> Unit)?)
+        val buttons = mutableListOf<BtnSpec>()
+
+        // DELETE — always present
+        buttons.add(BtnSpec("\u2715", Color.parseColor("#CC3333")) {
+            if (zone.isStick && zone.inputName.isNotBlank()) hideDebugOverlay(zone.inputName)
+            editingZones.removeAll { it.id == zone.id }
+            if (pendingZoneId == zone.id) pendingZoneId = null
+            dismissContextMenu()
+            rebuildZoneLayer()
+        })
+
+        // TURBO — button zones only, must be assigned
+        if (!zone.isStick && zone.inputName.isNotBlank()) {
+            val turboColor = if (zone.turbo) Color.parseColor("#FFB300") else Color.parseColor("#555555")
+            buttons.add(BtnSpec("\u26A1", turboColor) {
+                zone.turbo = !zone.turbo
+                dismissContextMenu()
+                rebuildZoneLayer()
+            })
+        }
+
+        // LOOK / MOVE toggle — stick zones only, must be assigned
+        // ⊕ = Move (position-based locomotion), ◎ = Look (velocity-based camera)
+        if (zone.isStick && zone.inputName.isNotBlank()) {
+            val modeColor = if (zone.lookMode) Color.parseColor("#7B2FBE") else Color.parseColor("#1A7A4A")
+            val modeIcon  = if (zone.lookMode) "\u25CE" else "\u2295"  // ◎ Look / ⊕ Move
+            buttons.add(BtnSpec(modeIcon, modeColor) {
+                zone.lookMode = !zone.lookMode
+                dismissContextMenu()
+                rebuildZoneLayer()
+            })
+        }
+
+        // TUNE — button zones only, must be assigned
+        if (!zone.isStick && zone.inputName.isNotBlank()) {
+            buttons.add(BtnSpec("\u2699", Color.parseColor("#007A99")) {
+                showTuningBox(zone.id, zone.inputName, zone.cx, zone.cy)
+            })
+        }
+
+        // TUNE — stick zones only, must be assigned (speed, sensitivity)
+        if (zone.isStick && zone.inputName.isNotBlank()) {
+            buttons.add(BtnSpec("\u2699", Color.parseColor("#007A99")) {
+                showStickTuningBox(zone.id, zone.inputName, zone.cx, zone.cy)
+            })
+        }
+
+        // MOVE — always last; drag handle, no click action
+        buttons.add(BtnSpec("\u271B", Color.parseColor("#336699"), null))
+
+        val spread = 52.0
+        val btnSize = dp(36)
+        val createdViews = mutableListOf<View>()
+
+        buttons.forEachIndexed { i, spec ->
+            val offset = (i - (buttons.size - 1) / 2.0) * spread
+            val angleRad = Math.toRadians(baseAngleDeg + offset)
+            val rawX = zone.cx + (placementR * cos(angleRad)).toFloat()
+            val rawY = zone.cy + (placementR * sin(angleRad)).toFloat()
+            val left = (rawX - btnR).coerceIn(0f, screenW - btnSize).toInt()
+            val top  = (rawY - btnR).coerceIn(0f, screenH - btnSize).toInt()
+
+            val btn = TextView(context).apply {
+                text = spec.icon
+                textSize = 15f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(spec.bgColor)
+                }
+                elevation = 14f
+                if (spec.onClick != null) setOnClickListener { spec.onClick.invoke() }
+            }
+            val lp = FrameLayout.LayoutParams(btnSize, btnSize).apply {
+                leftMargin = left; topMargin = top
+            }
+            zoneLayer?.addView(btn, lp)
+            contextMenuViews.add(btn)
+            createdViews.add(btn)
+        }
+
+        // Recalculates button positions from scratch based on current zone location.
+        // Called on initial show and on every drag tick so buttons always swing to
+        // the side with the most open space and never get clipped off screen.
+        val reposition = {
+            val goRight = (screenW - zone.cx) > zone.cx
+            val goDown  = (screenH - zone.cy) > zone.cy
+            val angle = when {
+                goRight && goDown  -> 45.0
+                !goRight && goDown -> 135.0
+                goRight && !goDown -> 315.0
+                else               -> 225.0
+            }
+            val zoneR2 = if (zone.isStick && zone.inputName.isNotBlank()) zone.outerRadius else zone.innerRadius
+            val placeR = zoneR2 + dp(32) + btnR
+            createdViews.forEachIndexed { i, btn ->
+                val offset = (i - (buttons.size - 1) / 2.0) * spread
+                val rad = Math.toRadians(angle + offset)
+                val bx = zone.cx + (placeR * cos(rad)).toFloat()
+                val by = zone.cy + (placeR * sin(rad)).toFloat()
+                val lp = btn.layoutParams as? FrameLayout.LayoutParams ?: return@forEachIndexed
+                lp.leftMargin = (bx - btnR).coerceIn(0f, screenW - btnSize).toInt()
+                lp.topMargin  = (by - btnR).coerceIn(0f, screenH - btnSize).toInt()
+                btn.layoutParams = lp
+            }
+        }
+
+        // Apply initial positions
+        reposition()
+
+        // Drag handle — last button in the list
+        val dragHandle = createdViews.last()
+        var dragStartRawX = 0f
+        var dragStartRawY = 0f
+        var dragStartCx = 0f
+        var dragStartCy = 0f
+
+        dragHandle.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    dragStartRawX = event.rawX
+                    dragStartRawY = event.rawY
+                    dragStartCx = zone.cx
+                    dragStartCy = zone.cy
+                    // Hide context menu buttons while dragging (zone stays visible)
+                    createdViews.forEach { it.visibility = View.INVISIBLE }
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val zoneR = if (zone.isStick && zone.inputName.isNotBlank()) zone.outerRadius else zone.innerRadius
+                    zone.cx = (dragStartCx + (event.rawX - dragStartRawX)).coerceIn(zoneR, screenW - zoneR)
+                    zone.cy = (dragStartCy + (event.rawY - dragStartRawY)).coerceIn(zoneR, screenH - zoneR)
+                    // Update zone circle position (still hidden — layout kept current for reappear)
+                    val zv = zoneViews[zone.id]
+                    val zvLp = zv?.layoutParams as? FrameLayout.LayoutParams
+                    if (zvLp != null) {
+                        zvLp.leftMargin = (zone.cx - zvLp.width / 2f).toInt()
+                        zvLp.topMargin  = (zone.cy - zvLp.height / 2f).toInt()
+                        zv.layoutParams = zvLp
+                    }
+                    // Recalculate button positions — angle flips automatically at each edge
+                    reposition()
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    // Restore context menu buttons at final position
+                    createdViews.forEach { it.visibility = View.VISIBLE }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        // Re-grab focus so gamepad button presses reach the KeyCatcherView.
+        // Clickable TextViews added above can steal focus, which would prevent
+        // handleButtonAssignment from being called when the user presses a new button.
+        keyCatcher?.requestFocus()
+    }
+
+    private fun dismissContextMenu() {
+        contextMenuViews.forEach { zoneLayer?.removeView(it) }
+        contextMenuViews.clear()
+        dismissTuningBox()
+        // If the pending zone is already assigned, clear the pending state — the user
+        // dismissed the menu without pressing a new input, so no reassignment should happen.
+        val pendingZone = editingZones.find { it.id == pendingZoneId }
+        if (pendingZone?.inputName?.isNotBlank() == true) pendingZoneId = null
+    }
+
+    private fun dismissTuningBox() {
+        tuningBoxView?.let { zoneLayer?.removeView(it) }
+        tuningBoxView = null
+    }
+
+    // ─── Key/axis catcher — receives controller input while config overlay is focused ──
+
+    private class KeyCatcherView(
+        ctx: Context,
+        private val onButton: (Int) -> Unit,
+        private val onAxis: (Int, Float) -> Unit
+    ) : View(ctx) {
+        init { isFocusable = true; isFocusableInTouchMode = true }
+
+        override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+            if (event.source and InputDevice.SOURCE_GAMEPAD != 0 ||
+                event.source and InputDevice.SOURCE_JOYSTICK != 0) {
+                if (event.repeatCount == 0) onButton(keyCode)
+                return true
+            }
+            return super.onKeyDown(keyCode, event)
+        }
+
+        override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+            if (event.source and InputDevice.SOURCE_GAMEPAD != 0 ||
+                event.source and InputDevice.SOURCE_JOYSTICK != 0) return true
+            return super.onKeyUp(keyCode, event)
+        }
+
+        override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+            val isJoystick = event.source and InputDevice.SOURCE_JOYSTICK != 0
+            val isGamepad  = event.source and InputDevice.SOURCE_GAMEPAD  != 0
+            if ((isJoystick || isGamepad) && event.action == MotionEvent.ACTION_MOVE) {
+                // D-pad HAT axes arrive with SOURCE_GAMEPAD — check these first
+                val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
+                val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
+                if (abs(hatX) > 0.5f) { onAxis(MotionEvent.AXIS_HAT_X, hatX); return true }
+                if (abs(hatY) > 0.5f) { onAxis(MotionEvent.AXIS_HAT_Y, hatY); return true }
+                // Analog stick axes arrive with SOURCE_JOYSTICK
+                if (isJoystick) {
+                    listOf(MotionEvent.AXIS_X, MotionEvent.AXIS_Y, MotionEvent.AXIS_Z, MotionEvent.AXIS_RZ).forEach { axis ->
+                        val v = event.getAxisValue(axis)
+                        if (abs(v) > 0.4f) { onAxis(axis, v); return true }
+                    }
+                }
+                return true
+            }
+            return super.dispatchGenericMotionEvent(event)
+        }
+    }
+
+    private fun handleButtonAssignment(keyCode: Int) {
+        if (pendingZoneId == null) return
+        val preset = DataStore.data.value.gameLayouts.find { it.id == editingLayoutId }
+            ?.let { l -> DataStore.data.value.controllerPresets.find { it.id == l.controllerPresetId } }
+        val label = preset?.buttons?.get(keyCode) ?: keyCodeLabel(keyCode)
+        assignPendingZone(label, false)
+    }
+
+    private fun handleAxisAssignment(axisCode: Int, value: Float) {
+        if (pendingZoneId == null) return
+        // D-pad HAT axes are directions, not analog sticks — resolve to a button label
+        if (axisCode == MotionEvent.AXIS_HAT_X || axisCode == MotionEvent.AXIS_HAT_Y) {
+            val label = when {
+                axisCode == MotionEvent.AXIS_HAT_X && value < 0 -> "D-Left"
+                axisCode == MotionEvent.AXIS_HAT_X && value > 0 -> "D-Right"
+                axisCode == MotionEvent.AXIS_HAT_Y && value < 0 -> "D-Up"
+                else                                             -> "D-Down"
+            }
+            assignPendingZone(label, false)
+            return
+        }
+        val preset = DataStore.data.value.gameLayouts.find { it.id == editingLayoutId }
+            ?.let { l -> DataStore.data.value.controllerPresets.find { it.id == l.controllerPresetId } }
+        val raw = preset?.axes?.get(axisCode) ?: axisCodeLabel(axisCode)
+        val label = raw.removeSuffix(" X").removeSuffix(" Y")
+        assignPendingZone(label, true)
+    }
+
+    private fun keyCodeLabel(code: Int) = when (code) {
+        KeyEvent.KEYCODE_BUTTON_A -> "A"
+        KeyEvent.KEYCODE_BUTTON_B -> "B"
+        KeyEvent.KEYCODE_BUTTON_X -> "X"
+        KeyEvent.KEYCODE_BUTTON_Y -> "Y"
+        KeyEvent.KEYCODE_BUTTON_L1 -> "LB"
+        KeyEvent.KEYCODE_BUTTON_R1 -> "RB"
+        KeyEvent.KEYCODE_BUTTON_L2 -> "LT"
+        KeyEvent.KEYCODE_BUTTON_R2 -> "RT"
+        KeyEvent.KEYCODE_BUTTON_THUMBL -> "L3"
+        KeyEvent.KEYCODE_BUTTON_THUMBR -> "R3"
+        KeyEvent.KEYCODE_BUTTON_START -> "Start"
+        KeyEvent.KEYCODE_BUTTON_SELECT -> "Select"
+        KeyEvent.KEYCODE_DPAD_UP -> "D-Up"
+        KeyEvent.KEYCODE_DPAD_DOWN -> "D-Down"
+        KeyEvent.KEYCODE_DPAD_LEFT -> "D-Left"
+        KeyEvent.KEYCODE_DPAD_RIGHT -> "D-Right"
+        else -> "Btn$code"
+    }
+
+    private fun axisCodeLabel(axis: Int) = when (axis) {
+        MotionEvent.AXIS_X, MotionEvent.AXIS_Y -> "L-Stick"
+        MotionEvent.AXIS_Z, MotionEvent.AXIS_RZ -> "R-Stick"
+        MotionEvent.AXIS_LTRIGGER -> "LT"
+        MotionEvent.AXIS_RTRIGGER -> "RT"
+        else -> "Axis$axis"
+    }
+
+    // ─── Zone circle view ─────────────────────────────────────────────────────
+
+    @SuppressLint("ViewConstructor")
+    inner class ZoneCircleView(
+        ctx: Context,
+        var zone: ZoneData,
+        private val onTap: (ZoneData) -> Unit
+    ) : View(ctx) {
+
+        private var dragMode = DragMode.NONE
+        private var lastRawX = 0f
+        private var lastRawY = 0f
+        private var menuHidden = false
+
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(150, 0, 191, 255); style = Paint.Style.FILL }
+        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#00BFFF"); style = Paint.Style.STROKE; strokeWidth = 3f }
+        private val outerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#FF8C00"); style = Paint.Style.STROKE; strokeWidth = 3f }
+        private val deadZonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#00BFFF"); style = Paint.Style.STROKE; strokeWidth = 2f; pathEffect = DashPathEffect(floatArrayOf(8f, 5f), 0f) }
+        private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#FF8C00"); style = Paint.Style.FILL }
+        private val deadDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#00BFFF"); style = Paint.Style.FILL }
+        private val pendingFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(100, 180, 180, 180); style = Paint.Style.FILL }
+        private val dashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.GRAY; style = Paint.Style.STROKE; strokeWidth = 2f; pathEffect = DashPathEffect(floatArrayOf(12f, 7f), 0f) }
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textAlign = Paint.Align.CENTER; textSize = 28f }
+        private val turboBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#FFB300"); style = Paint.Style.FILL }
+
+        // Returns the angle (radians) pointing away from the nearest screen corner —
+        // this is where the resize handles are placed so they're always in open space.
+        private fun handleAngle(): Double {
+            val sw = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels).toFloat()
+            val sh = (configRoot?.height?.takeIf { it > 0 } ?: dm.heightPixels).toFloat()
+            val corners = listOf(0f to 0f, sw to 0f, 0f to sh, sw to sh)
+            val nearest = corners.minByOrNull { (cx2, cy2) ->
+                (zone.cx - cx2).pow(2) + (zone.cy - cy2).pow(2)
+            } ?: (0f to 0f)
+            return atan2((zone.cy - nearest.second).toDouble(), (zone.cx - nearest.first).toDouble())
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val cx = width / 2f; val cy = height / 2f
+            if (zone.inputName.isBlank()) {
+                canvas.drawCircle(cx, cy, zone.innerRadius, pendingFill)
+                canvas.drawCircle(cx, cy, zone.innerRadius, dashPaint)
+                textPaint.textSize = zone.innerRadius * 0.65f
+                textPaint.color = Color.LTGRAY
+                canvas.drawText("?", cx, cy + textPaint.textSize * 0.35f, textPaint)
+            } else {
+                canvas.drawCircle(cx, cy, zone.innerRadius, fillPaint)
+                canvas.drawCircle(cx, cy, zone.innerRadius, strokePaint)
+                if (zone.isStick) {
+                    canvas.drawCircle(cx, cy, zone.outerRadius, outerPaint)
+                    canvas.drawCircle(cx, cy, zone.deadZone * zone.outerRadius, deadZonePaint)
+                    // Resize handles — placed on the side opposite the nearest screen corner
+                    val ang = handleAngle()
+                    val outerDotX = cx + cos(ang).toFloat() * zone.outerRadius
+                    val outerDotY = cy + sin(ang).toFloat() * zone.outerRadius
+                    val deadDotX  = cx + cos(ang).toFloat() * zone.deadZone * zone.outerRadius
+                    val deadDotY  = cy + sin(ang).toFloat() * zone.deadZone * zone.outerRadius
+                    canvas.drawCircle(outerDotX, outerDotY, dp(10).toFloat(), handlePaint)
+                    canvas.drawCircle(deadDotX,  deadDotY,  dp(8).toFloat(),  deadDotPaint)
+                }
+                // Stick zones show a joystick symbol; button zones show the button label
+                val displayText = if (zone.isStick) "\u2295" else zone.inputName
+                textPaint.textSize = when {
+                    zone.isStick -> zone.innerRadius * 0.85f
+                    displayText.length > 4 -> zone.innerRadius * 0.45f
+                    else -> zone.innerRadius * 0.6f
+                }
+                textPaint.color = Color.WHITE
+                canvas.drawText(displayText, cx, cy + textPaint.textSize / 3f, textPaint)
+
+                // Turbo badge — small filled circle with "T" in top-right of inner circle
+                if (zone.turbo) {
+                    val bx = cx + zone.innerRadius * 0.65f
+                    val by = cy - zone.innerRadius * 0.65f
+                    val br = zone.innerRadius * 0.35f
+                    canvas.drawCircle(bx, by, br, turboBgPaint)
+                    textPaint.textSize = br * 1.3f; textPaint.color = Color.BLACK
+                    canvas.drawText("T", bx, by + br * 0.4f, textPaint)
+                }
+            }
+        }
+
+        @SuppressLint("ClickableViewAccessibility")
+        override fun onTouchEvent(e: MotionEvent): Boolean {
+            val cx = width / 2f; val cy = height / 2f
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    val dx = e.x - cx; val dy = e.y - cy
+                    val dist = sqrt(dx * dx + dy * dy)
+                    dragMode = if (zone.isStick && zone.inputName.isNotBlank()) {
+                        // Only the dot itself triggers resize — not the full ring.
+                        val ang = handleAngle()
+                        val outerDotX = cx + cos(ang).toFloat() * zone.outerRadius
+                        val outerDotY = cy + sin(ang).toFloat() * zone.outerRadius
+                        val deadDotX  = cx + cos(ang).toFloat() * zone.deadZone * zone.outerRadius
+                        val deadDotY  = cy + sin(ang).toFloat() * zone.deadZone * zone.outerRadius
+                        val dOuter = sqrt((e.x - outerDotX).pow(2) + (e.y - outerDotY).pow(2))
+                        val dDead  = sqrt((e.x - deadDotX).pow(2)  + (e.y - deadDotY).pow(2))
+                        when {
+                            dOuter < dp(22) -> DragMode.RESIZE
+                            dDead  < dp(20) -> DragMode.DEADZONE
+                            dist < zone.innerRadius + dp(20) -> DragMode.MOVE
+                            else -> return false
+                        }
+                    } else {
+                        if (dist < zone.innerRadius + dp(20)) DragMode.MOVE else return false
+                    }
+                    lastRawX = e.rawX; lastRawY = e.rawY
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val ddx = e.rawX - lastRawX; val ddy = e.rawY - lastRawY
+                    when (dragMode) {
+                        DragMode.MOVE -> {
+                            if (!menuHidden) {
+                                contextMenuViews.forEach { it.visibility = View.INVISIBLE }
+                                menuHidden = true
+                            }
+                            moveZone(ddx, ddy)
+                        }
+                        DragMode.RESIZE -> resizeOuter(e.x - cx, e.y - cy)
+                        DragMode.DEADZONE -> resizeDeadZone(e.x - cx, e.y - cy)
+                        DragMode.NONE -> {}
+                    }
+                    lastRawX = e.rawX; lastRawY = e.rawY
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (menuHidden) {
+                        contextMenuViews.forEach { it.visibility = View.VISIBLE }
+                        menuHidden = false
+                    }
+                    if (dragMode == DragMode.MOVE && zone.inputName.isNotBlank()) onTap(zone)
+                    dragMode = DragMode.NONE
+                    return true
+                }
+                else -> return false
+            }
+        }
+
+        private fun moveZone(ddx: Float, ddy: Float) {
+            val r = if (zone.isStick && zone.inputName.isNotBlank()) zone.outerRadius else zone.innerRadius
+            val overlayW = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels).toFloat()
+            val overlayH = (configRoot?.height?.takeIf { it > 0 } ?: dm.heightPixels).toFloat()
+            zone.cx = (zone.cx + ddx).coerceIn(r, overlayW - r)
+            zone.cy = (zone.cy + ddy).coerceIn(r, overlayH - r)
+            val lp = layoutParams as? FrameLayout.LayoutParams ?: return
+            lp.leftMargin = (zone.cx - lp.width / 2f).toInt()
+            lp.topMargin = (zone.cy - lp.height / 2f).toInt()
+            layoutParams = lp
+            if (zone.isStick && zone.inputName.isNotBlank())
+                repositionDebugOverlay(zone.inputName, zone.cx, zone.cy, zone.outerRadius)
+        }
+
+        private fun resizeDeadZone(localDx: Float, localDy: Float) {
+            val newR = sqrt(localDx * localDx + localDy * localDy)
+            // Clamp: 5% minimum so the dead zone never vanishes; 85% maximum so there's always room to move
+            zone.deadZone = (newR / zone.outerRadius).coerceIn(0.05f, 0.85f)
+            invalidate()
+        }
+
+        private fun resizeOuter(localDx: Float, localDy: Float) {
+            zone.outerRadius = sqrt(localDx * localDx + localDy * localDy)
+                .coerceAtLeast(zone.innerRadius + dp(20).toFloat())
+            val newSize = viewSizeForZone(zone)
+            val lp = layoutParams as? FrameLayout.LayoutParams ?: return
+            lp.width = newSize; lp.height = newSize
+            lp.leftMargin = (zone.cx - newSize / 2f).toInt()
+            lp.topMargin = (zone.cy - newSize / 2f).toInt()
+            layoutParams = lp
+            if (zone.isStick && zone.inputName.isNotBlank())
+                repositionDebugOverlay(zone.inputName, zone.cx, zone.cy, zone.outerRadius)
+            invalidate()
+        }
+    }
+
+    // ─── Adjust icon — four corner crop marks ────────────────────────────────
+
+    private inner class AdjustIcon(ctx: Context) : View(ctx) {
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#888888")
+            style = Paint.Style.STROKE
+            strokeWidth = 2.5f
+            strokeCap = Paint.Cap.SQUARE
+        }
+        override fun onDraw(canvas: Canvas) {
+            val w = width.toFloat(); val h = height.toFloat()
+            val m = w * 0.15f; val len = w * 0.28f
+            // Top-left
+            canvas.drawLine(m, m + len, m, m, p); canvas.drawLine(m, m, m + len, m, p)
+            // Top-right
+            canvas.drawLine(w-m-len, m, w-m, m, p); canvas.drawLine(w-m, m, w-m, m+len, p)
+            // Bottom-left
+            canvas.drawLine(m, h-m-len, m, h-m, p); canvas.drawLine(m, h-m, m+len, h-m, p)
+            // Bottom-right
+            canvas.drawLine(w-m-len, h-m, w-m, h-m, p); canvas.drawLine(w-m, h-m, w-m, h-m-len, p)
+        }
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    private fun viewSizeForZone(zone: ZoneData): Int =
+        ((if (zone.isStick && zone.inputName.isNotBlank()) zone.outerRadius else zone.innerRadius) * 2 + dp(24)).toInt()
+            .coerceAtLeast(dp(56))
+
+    private fun circleDrawable(fill: Int, stroke: Int) = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL; setColor(fill); setStroke(dp(2), stroke)
+    }
+
+    // ─── Button tuning box ────────────────────────────────────────────────────
+
+    private fun showTuningBox(zoneId: String, label: String, zoneCx: Float, zoneCy: Float) {
+        dismissTuningBox()
+        tuneZoneId = zoneId
+        tuneDisplayLabel = label
+        isTuningStick = false
+        val screenW = (configRoot?.width?.takeIf  { it > 0 } ?: dm.widthPixels).toFloat()
+        val screenH = (configRoot?.height?.takeIf { it > 0 } ?: dm.heightPixels).toFloat()
+        val boxW = dp(220)
+
+        val box = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.argb(230, 0, 0, 0))
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(1), Color.parseColor("#00BFFF"))
+            }
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            elevation = 14f
+        }
+
+        // Title row
+        val titleRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8) }
+        }
+        titleRow.addView(TextView(context).apply {
+            text = "TUNE \u2014 $label"
+            textSize = 11f
+            setTextColor(Color.parseColor("#00BFFF"))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        titleRow.addView(TextView(context).apply {
+            text = "\u2715"
+            textSize = 11f
+            setTextColor(Color.parseColor("#888888"))
+            setPadding(dp(6), dp(4), dp(2), dp(4))
+            setOnClickListener { dismissTuningBox() }
+        })
+        box.addView(titleRow)
+
+        // Content placeholder — rebuilt by refreshTuningContent()
+        val contentHolder = FrameLayout(context)
+        box.addView(contentHolder, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        // Consume touches inside the box so they don't bubble up to zoneLayer and close the box.
+        // Children still receive their events first; this only catches taps on non-interactive areas.
+        box.setOnTouchListener { _, _ -> true }
+
+        // Position: below zone if there's room, otherwise above; horizontally centred on zone
+        val lp = FrameLayout.LayoutParams(boxW, FrameLayout.LayoutParams.WRAP_CONTENT)
+        lp.leftMargin = (zoneCx - boxW / 2f).toInt().coerceIn(0, (screenW - boxW).toInt())
+        lp.topMargin  = if (zoneCy < screenH / 2f) (zoneCy + dp(60)).toInt()
+                        else                        (zoneCy - dp(60) - dp(200)).toInt().coerceAtLeast(0)
+        zoneLayer?.addView(box, lp)
+        tuningBoxView = box
+
+        // Fill content now that the view is in the hierarchy
+        contentHolder.addView(buildTuningContent())
+    }
+
+    private fun refreshTuningContent() {
+        // Defer to the next main-thread iteration so this never runs during a touch dispatch.
+        // Calling removeAllViews() synchronously inside a touch listener removes the view
+        // currently processing the event mid-dispatch, which crashes the view system.
+        handler.post {
+            val box = tuningBoxView as? LinearLayout ?: return@post
+            val holder = box.getChildAt(1) as? FrameLayout ?: return@post
+            holder.removeAllViews()
+            holder.addView(if (isTuningStick) buildStickTuningContent() else buildTuningContent())
+        }
+    }
+
+    private fun buildTuningContent(): View {
+        val tuning = ButtonTuningStore.get(tuneZoneId)
+        val container = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+
+        // Android API level row — GLOBAL setting, applies to all buttons
+        val apiRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(6) }
+        }
+        apiRow.addView(TextView(context).apply {
+            text = "ANDROID"
+            textSize = 10f
+            setTextColor(Color.parseColor("#AAAAAA"))
+            layoutParams = LinearLayout.LayoutParams(dp(56), LinearLayout.LayoutParams.WRAP_CONTENT)
+        })
+        AndroidApiLevel.values().forEach { level ->
+            val active = ButtonTuningStore.get(tuneZoneId).androidApiLevel == level
+            apiRow.addView(TextView(context).apply {
+                text = level.label
+                textSize = 10f
+                setPadding(dp(7), dp(4), dp(7), dp(4))
+                setTextColor(if (active) Color.BLACK else Color.parseColor("#00BFFF"))
+                background = if (active) GradientDrawable().apply {
+                    setColor(Color.parseColor("#00BFFF"))
+                    cornerRadius = dp(4).toFloat()
+                } else GradientDrawable().apply {
+                    setColor(Color.TRANSPARENT)
+                    setStroke(dp(1), Color.parseColor("#00BFFF"))
+                    cornerRadius = dp(4).toFloat()
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(4) }
+                setOnClickListener {
+                    ButtonTuningStore.get(tuneZoneId).androidApiLevel = level
+                    refreshTuningContent()
+                }
+            })
+        }
+        container.addView(apiRow)
+
+        // Mode row
+        val modeRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(6) }
+        }
+        modeRow.addView(TextView(context).apply {
+            text = "MODE"
+            textSize = 10f
+            setTextColor(Color.parseColor("#AAAAAA"))
+            layoutParams = LinearLayout.LayoutParams(dp(56), LinearLayout.LayoutParams.WRAP_CONTENT)
+        })
+        ButtonMode.values().forEach { mode ->
+            val active = tuning.mode == mode
+            modeRow.addView(TextView(context).apply {
+                text = mode.label
+                textSize = 10f
+                setPadding(dp(7), dp(4), dp(7), dp(4))
+                setTextColor(if (active) Color.BLACK else Color.parseColor("#00BFFF"))
+                background = if (active) GradientDrawable().apply {
+                    setColor(Color.parseColor("#00BFFF"))
+                    cornerRadius = dp(4).toFloat()
+                } else GradientDrawable().apply {
+                    setColor(Color.TRANSPARENT)
+                    setStroke(dp(1), Color.parseColor("#00BFFF"))
+                    cornerRadius = dp(4).toFloat()
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(4) }
+                setOnClickListener {
+                    ButtonTuningStore.get(tuneZoneId).mode = mode
+                    refreshTuningContent()
+                }
+            })
+        }
+        container.addView(modeRow)
+
+        // Size and duration (all modes)
+        container.addView(stepperRow(
+            label = "SIZE",
+            getValue = { "${ButtonTuningStore.get(tuneZoneId).tapSizePx.toInt()}px" },
+            minus = { amount ->
+                ButtonTuningStore.get(tuneZoneId).tapSizePx =
+                    (ButtonTuningStore.get(tuneZoneId).tapSizePx - 1f * amount).coerceAtLeast(0f)
+            },
+            plus = { amount ->
+                ButtonTuningStore.get(tuneZoneId).tapSizePx =
+                    (ButtonTuningStore.get(tuneZoneId).tapSizePx + 1f * amount).coerceAtMost(100f)
+            }
+        ))
+        container.addView(stepperRow(
+            label = "DURATION",
+            getValue = { fmtMs(ButtonTuningStore.get(tuneZoneId).tapDurationMs) },
+            minus = { amount ->
+                ButtonTuningStore.get(tuneZoneId).tapDurationMs =
+                    (ButtonTuningStore.get(tuneZoneId).tapDurationMs - 10L * amount).coerceAtLeast(0L)
+            },
+            plus = { amount ->
+                ButtonTuningStore.get(tuneZoneId).tapDurationMs =
+                    (ButtonTuningStore.get(tuneZoneId).tapDurationMs + 10L * amount).coerceAtMost(100_000L)
+            }
+        ))
+
+        // Interval (REPEAT only)
+        if (tuning.mode == ButtonMode.REPEAT) {
+            container.addView(stepperRow(
+                label = "INTERVAL",
+                getValue = { fmtMs(ButtonTuningStore.get(tuneZoneId).repeatIntervalMs) },
+                minus = { amount ->
+                    ButtonTuningStore.get(tuneZoneId).repeatIntervalMs =
+                        (ButtonTuningStore.get(tuneZoneId).repeatIntervalMs - 25L * amount).coerceAtLeast(0L)
+                },
+                plus = { amount ->
+                    ButtonTuningStore.get(tuneZoneId).repeatIntervalMs =
+                        (ButtonTuningStore.get(tuneZoneId).repeatIntervalMs + 25L * amount).coerceAtMost(100_000L)
+                }
+            ))
+        }
+
+        // Release duration (HOLD only)
+        if (tuning.mode == ButtonMode.HOLD) {
+            container.addView(stepperRow(
+                label = "RELEASE",
+                getValue = { fmtMs(ButtonTuningStore.get(tuneZoneId).holdReleaseDurationMs) },
+                minus = { amount ->
+                    ButtonTuningStore.get(tuneZoneId).holdReleaseDurationMs =
+                        (ButtonTuningStore.get(tuneZoneId).holdReleaseDurationMs - 10L * amount).coerceAtLeast(0L)
+                },
+                plus = { amount ->
+                    ButtonTuningStore.get(tuneZoneId).holdReleaseDurationMs =
+                        (ButtonTuningStore.get(tuneZoneId).holdReleaseDurationMs + 10L * amount).coerceAtMost(100_000L)
+                }
+            ))
+        }
+
+        // Reset
+        val resetRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(4) }
+        }
+        resetRow.addView(TextView(context).apply {
+            text = "RESET"
+            textSize = 10f
+            setTextColor(Color.parseColor("#CC3333"))
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            background = outlineDrawable(Color.parseColor("#CC3333"))
+            setOnClickListener {
+                ButtonTuningStore.reset(tuneZoneId)
+                refreshTuningContent()
+            }
+        })
+        container.addView(resetRow)
+
+        return container
+    }
+
+    // Formats a millisecond value as "Xs" (≥1000ms) or "Xms" (<1000ms).
+    private fun fmtMs(ms: Long): String =
+        if (ms >= 1000L) "${"%.1f".format(ms / 1000.0)}s" else "${ms}ms"
+
+    // getValue is called after each action to refresh the displayed value in place —
+    // no view rebuild needed, so press-and-hold repeat is never cancelled by a layout change.
+    private fun stepperRow(
+        label: String,
+        getValue: () -> String,
+        minus: (Int) -> Unit,
+        plus: (Int) -> Unit
+    ): LinearLayout {
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(4) }
+        }
+
+        row.addView(TextView(context).apply {
+            text = label
+            textSize = 10f
+            setTextColor(Color.parseColor("#AAAAAA"))
+            layoutParams = LinearLayout.LayoutParams(dp(64), LinearLayout.LayoutParams.WRAP_CONTENT)
+        })
+
+        val valueLabel = TextView(context).apply {
+            text = getValue()
+            textSize = 10f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(dp(64), LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+
+        // Acceleration: 1× for 0–1.5 s, 10× after 1.5 s, 100× after 3 s. Repeat every 80 ms.
+        // tuningRepeatRunnable lives on the OverlayManager — not inside the view — so view
+        // detachment (ACTION_CANCEL from removeAllViews) cannot kill a live hold gesture.
+        fun makeBtn(icon: String, action: (Int) -> Unit): TextView = TextView(context).apply {
+            text = icon
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(6), dp(2), dp(6), dp(2))
+            background = outlineDrawable(Color.parseColor("#555555"))
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(24))
+
+            setOnTouchListener { v, e ->
+                when (e.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        val pressStart = System.currentTimeMillis()
+                        action(1)
+                        valueLabel.text = getValue()
+                        tuningRepeatRunnable?.let { handler.removeCallbacks(it) }
+                        tuningRepeatRunnable = object : Runnable {
+                            override fun run() {
+                                val held = System.currentTimeMillis() - pressStart
+                                val amount = when {
+                                    held > 3000L -> 100
+                                    held > 1500L -> 10
+                                    else         -> 1
+                                }
+                                action(amount)
+                                valueLabel.text = getValue()
+                                handler.postDelayed(this, 80L)
+                            }
+                        }
+                        handler.postDelayed(tuningRepeatRunnable!!, 400L)
+                        v.isPressed = true
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        tuningRepeatRunnable?.let { handler.removeCallbacks(it) }
+                        tuningRepeatRunnable = null
+                        v.isPressed = false
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+
+        row.addView(makeBtn("\u2013") { minus(it) })
+        row.addView(valueLabel)
+        row.addView(makeBtn("+") { plus(it) })
+        return row
+    }
+
+    // ─── Stick tuning box ─────────────────────────────────────────────────────
+
+    private fun showStickTuningBox(zoneId: String, label: String, zoneCx: Float, zoneCy: Float) {
+        dismissTuningBox()
+        stickTuneZoneId = zoneId
+        stickTuneDisplayLabel = label
+        isTuningStick = true
+        val screenW = (configRoot?.width?.takeIf  { it > 0 } ?: dm.widthPixels).toFloat()
+        val screenH = (configRoot?.height?.takeIf { it > 0 } ?: dm.heightPixels).toFloat()
+        val boxW = dp(220)
+
+        val box = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.argb(230, 0, 0, 0))
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(1), Color.parseColor("#7B2FBE"))  // purple border to distinguish from button tuning
+            }
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            elevation = 14f
+        }
+
+        val titleRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8) }
+        }
+        titleRow.addView(TextView(context).apply {
+            text = "STICK TUNE \u2014 $label"
+            textSize = 11f
+            setTextColor(Color.parseColor("#BB88FF"))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        titleRow.addView(TextView(context).apply {
+            text = "\u2715"
+            textSize = 11f
+            setTextColor(Color.parseColor("#888888"))
+            setPadding(dp(6), dp(4), dp(2), dp(4))
+            setOnClickListener { dismissTuningBox() }
+        })
+        box.addView(titleRow)
+
+        val contentHolder = FrameLayout(context)
+        box.addView(contentHolder, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        // Consume touches inside the box so they don't bubble up to zoneLayer and close the box.
+        box.setOnTouchListener { _, _ -> true }
+
+        val lp = FrameLayout.LayoutParams(boxW, FrameLayout.LayoutParams.WRAP_CONTENT)
+        lp.leftMargin = (zoneCx - boxW / 2f).toInt().coerceIn(0, (screenW - boxW).toInt())
+        lp.topMargin  = if (zoneCy < screenH / 2f) (zoneCy + dp(60)).toInt()
+                        else                        (zoneCy - dp(60) - dp(200)).toInt().coerceAtLeast(0)
+        zoneLayer?.addView(box, lp)
+        tuningBoxView = box
+
+        contentHolder.addView(buildStickTuningContent())
+    }
+
+    private fun buildStickTuningContent(): View {
+        val tuning = ButtonTuningStore.getStick(stickTuneZoneId)
+        val container = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+
+        // Android version — per-stick, changeable here
+        val apiRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(6) }
+        }
+        apiRow.addView(TextView(context).apply {
+            text = "ANDROID"
+            textSize = 10f
+            setTextColor(Color.parseColor("#AAAAAA"))
+            layoutParams = LinearLayout.LayoutParams(dp(56), LinearLayout.LayoutParams.WRAP_CONTENT)
+        })
+        AndroidApiLevel.values().forEach { level ->
+            val active = ButtonTuningStore.getStick(stickTuneZoneId).androidApiLevel == level
+            apiRow.addView(TextView(context).apply {
+                text = level.label
+                textSize = 10f
+                setPadding(dp(7), dp(4), dp(7), dp(4))
+                setTextColor(if (active) Color.BLACK else Color.parseColor("#BB88FF"))
+                background = if (active) GradientDrawable().apply {
+                    setColor(Color.parseColor("#BB88FF"))
+                    cornerRadius = dp(4).toFloat()
+                } else GradientDrawable().apply {
+                    setColor(Color.TRANSPARENT)
+                    setStroke(dp(1), Color.parseColor("#BB88FF"))
+                    cornerRadius = dp(4).toFloat()
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(4) }
+                setOnClickListener {
+                    ButtonTuningStore.getStick(stickTuneZoneId).androidApiLevel = level
+                    refreshTuningContent()
+                }
+            })
+        }
+        container.addView(apiRow)
+
+        // SPEED — gesture segment duration in ms (10 ms – 100 s)
+        container.addView(stepperRow(
+            label = "SPEED",
+            getValue = { fmtMs(ButtonTuningStore.getStick(stickTuneZoneId).speedMs) },
+            minus = { amount ->
+                ButtonTuningStore.getStick(stickTuneZoneId).speedMs =
+                    (ButtonTuningStore.getStick(stickTuneZoneId).speedMs - 10L * amount).coerceAtLeast(10L)
+            },
+            plus = { amount ->
+                ButtonTuningStore.getStick(stickTuneZoneId).speedMs =
+                    (ButtonTuningStore.getStick(stickTuneZoneId).speedMs + 10L * amount).coerceAtMost(100_000L)
+            }
+        ))
+
+        // SENSITIVITY — sweep distance scale (10% – 300%)
+        container.addView(stepperRow(
+            label = "SENS",
+            getValue = { "${(ButtonTuningStore.getStick(stickTuneZoneId).sensitivityPct * 100).toInt()}%" },
+            minus = { amount ->
+                val cur = ButtonTuningStore.getStick(stickTuneZoneId).sensitivityPct
+                ButtonTuningStore.getStick(stickTuneZoneId).sensitivityPct =
+                    (Math.round((cur - 0.1f * amount) * 10) / 10f).coerceAtLeast(0.1f)
+            },
+            plus = { amount ->
+                val cur = ButtonTuningStore.getStick(stickTuneZoneId).sensitivityPct
+                ButtonTuningStore.getStick(stickTuneZoneId).sensitivityPct =
+                    (Math.round((cur + 0.1f * amount) * 10) / 10f).coerceAtMost(3.0f)
+            }
+        ))
+
+        // LATCH — ms below dead zone before chain releases (absorbs stick wobble)
+        container.addView(stepperRow(
+            label = "LATCH",
+            getValue = {
+                val v = ButtonTuningStore.getStick(stickTuneZoneId).latchMs
+                if (v == 0L) "OFF" else fmtMs(v)
+            },
+            minus = { amount ->
+                val cur = ButtonTuningStore.getStick(stickTuneZoneId).latchMs
+                ButtonTuningStore.getStick(stickTuneZoneId).latchMs =
+                    (cur - 10L * amount).coerceAtLeast(0L)
+            },
+            plus = { amount ->
+                val cur = ButtonTuningStore.getStick(stickTuneZoneId).latchMs
+                ButtonTuningStore.getStick(stickTuneZoneId).latchMs =
+                    (cur + 10L * amount).coerceAtMost(2000L)
+            }
+        ))
+
+        // COAST — ms to continue in last direction after confirmed release
+        container.addView(stepperRow(
+            label = "COAST",
+            getValue = {
+                val v = ButtonTuningStore.getStick(stickTuneZoneId).coastMs
+                if (v == 0L) "OFF" else fmtMs(v)
+            },
+            minus = { amount ->
+                val cur = ButtonTuningStore.getStick(stickTuneZoneId).coastMs
+                ButtonTuningStore.getStick(stickTuneZoneId).coastMs =
+                    (cur - 10L * amount).coerceAtLeast(0L)
+            },
+            plus = { amount ->
+                val cur = ButtonTuningStore.getStick(stickTuneZoneId).coastMs
+                ButtonTuningStore.getStick(stickTuneZoneId).coastMs =
+                    (cur + 10L * amount).coerceAtMost(2000L)
+            }
+        ))
+
+        // DEBUG overlay toggle row
+        val debugRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6); bottomMargin = dp(2) }
+        }
+        debugRow.addView(TextView(context).apply {
+            text = "DEBUG"
+            textSize = 10f
+            setTextColor(Color.parseColor("#AAAAAA"))
+            layoutParams = LinearLayout.LayoutParams(dp(56), LinearLayout.LayoutParams.WRAP_CONTENT)
+        })
+        listOf("OFF", "ON").forEach { option ->
+            val isActive = (option == "ON") == ButtonTuningStore.getStick(stickTuneZoneId).showDebug
+            debugRow.addView(TextView(context).apply {
+                text = option
+                textSize = 10f
+                setPadding(dp(7), dp(4), dp(7), dp(4))
+                setTextColor(if (isActive) Color.BLACK else Color.parseColor("#BB88FF"))
+                background = if (isActive) GradientDrawable().apply {
+                    setColor(Color.parseColor("#BB88FF"))
+                    cornerRadius = dp(4).toFloat()
+                } else GradientDrawable().apply {
+                    setColor(Color.TRANSPARENT)
+                    setStroke(dp(1), Color.parseColor("#BB88FF"))
+                    cornerRadius = dp(4).toFloat()
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(4) }
+                setOnClickListener {
+                    val show = option == "ON"
+                    ButtonTuningStore.getStick(stickTuneZoneId).showDebug = show
+                    if (show) showDebugOverlay(stickTuneDisplayLabel)
+                    else hideDebugOverlay(stickTuneDisplayLabel)
+                    refreshTuningContent()
+                }
+            })
+        }
+        container.addView(debugRow)
+
+        // Reset
+        val resetRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(4) }
+        }
+        resetRow.addView(TextView(context).apply {
+            text = "RESET"
+            textSize = 10f
+            setTextColor(Color.parseColor("#CC3333"))
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            background = outlineDrawable(Color.parseColor("#CC3333"))
+            setOnClickListener {
+                ButtonTuningStore.resetStick(stickTuneZoneId)
+                hideDebugOverlay(stickTuneDisplayLabel)
+                refreshTuningContent()
+            }
+        })
+        container.addView(resetRow)
+
+        return container
+    }
+
+    private fun outlineDrawable(stroke: Int) = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE; setColor(Color.TRANSPARENT)
+        setStroke(dp(1), stroke); cornerRadius = dp(6).toFloat()
+    }
+
+    // ─── Stick Debug Overlay ──────────────────────────────────────────────────
+
+    /**
+     * Called from masterTick on the Dispatchers.Default thread.
+     * Posts to main thread to update the DebugStickView for the given stick label.
+     * @param label   The stick label (e.g. "LEFT_STICK")
+     * @param touchX  Current gesture endpoint X in screen pixels
+     * @param touchY  Current gesture endpoint Y in screen pixels
+     * @param axisX   Raw axis X value [-1..1] after dead-zone
+     * @param axisY   Raw axis Y value [-1..1] after dead-zone
+     * @param active  true = stick held; false = released (reset dot to centre)
+     */
+    fun updateStickDebug(label: String, touchX: Float, touchY: Float,
+                         axisX: Float, axisY: Float, active: Boolean) {
+        val view = debugViews[label] ?: return
+        handler.post { view.update(touchX, touchY, axisX, axisY, active) }
+    }
+
+    private fun showDebugOverlay(label: String) {
+        // Find the zone data for this stick
+        val zone = editingZones.find { it.inputName == label && it.isStick } ?: return
+        if (debugViews.containsKey(label)) return  // already showing
+
+        val size = debugViewSize(zone.outerRadius)
+        val view = DebugStickView(context, zoneCx = zone.cx, zoneCy = zone.cy,
+            radius = zone.outerRadius, deadZoneFraction = zone.deadZone)
+        debugViews[label] = view
+
+        val params = WindowManager.LayoutParams(
+            size, size,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = (zone.cx - size / 2f).toInt()
+            y = (zone.cy - size / 2f).toInt()
+        }
+        debugParams[label] = params
+        runCatching { wm.addView(view, params) }
+    }
+
+    private fun hideDebugOverlay(label: String) {
+        debugParams.remove(label)
+        val view = debugViews.remove(label) ?: return
+        runCatching { wm.removeView(view) }
+    }
+
+    private fun removeAllDebugViews() {
+        debugViews.keys.toList().forEach { hideDebugOverlay(it) }
+    }
+
+    // Called from ZoneCircleView when a stick zone is moved or resized.
+    internal fun repositionDebugOverlay(label: String, cx: Float, cy: Float, outerRadius: Float) {
+        val view = debugViews[label] ?: return
+        val params = debugParams[label] ?: return
+        val newSize = debugViewSize(outerRadius)
+        view.zoneCx = cx; view.zoneCy = cy
+        view.updateZone(outerRadius)
+        params.width = newSize; params.height = newSize
+        params.x = (cx - newSize / 2f).toInt()
+        params.y = (cy - newSize / 2f).toInt()
+        runCatching { wm.updateViewLayout(view, params) }
+    }
+
+    private fun debugViewSize(outerRadius: Float) = (outerRadius * 2f + dp(48)).toInt()
+
+    @SuppressLint("ViewConstructor")
+    inner class DebugStickView(
+        context: Context,
+        // Zone center in screen coordinates — updated by repositionDebugOverlay when zone is moved
+        var zoneCx: Float = 0f,
+        var zoneCy: Float = 0f,
+        var radius: Float,
+        var deadZoneFraction: Float
+    ) : View(context) {
+
+        private val paintBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+            color = Color.parseColor("#80BB88FF")
+        }
+        private val paintDeadZone = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1f
+            color = Color.parseColor("#50BB88FF")
+        }
+        private val paintCross = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1f
+            color = Color.parseColor("#50FFFFFF")
+        }
+        private val paintLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+            color = Color.parseColor("#CCBB88FF")
+        }
+        private val paintDot = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.parseColor("#FFBB88FF")
+        }
+        private val paintText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 24f
+            color = Color.parseColor("#CCFFFFFF")
+            textAlign = Paint.Align.CENTER
+        }
+
+        private val pad = 12f
+        private var localCx = 0f
+        private var localCy = 0f
+
+        private var dotX = 0f
+        private var dotY = 0f
+        private var axisXVal = 0f
+        private var axisYVal = 0f
+        private var isActive = false
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            localCx = w / 2f
+            localCy = h / 2f
+            dotX = localCx
+            dotY = localCy
+        }
+
+        // Called by repositionDebugOverlay when zone is resized.
+        fun updateZone(newRadius: Float) {
+            radius = newRadius
+            dotX = localCx; dotY = localCy
+            invalidate()
+        }
+
+        fun update(touchX: Float, touchY: Float, axisX: Float, axisY: Float, active: Boolean) {
+            // Convert screen-space gesture endpoint to view-local coordinates.
+            // The window is centred on zoneCx/zoneCy, so the offset is direct.
+            dotX = localCx + (touchX - zoneCx)
+            dotY = localCy + (touchY - zoneCy)
+            axisXVal = axisX
+            axisYVal = axisY
+            isActive = active
+            if (!active) { dotX = localCx; dotY = localCy }
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            canvas.drawCircle(localCx, localCy, radius, paintBorder)
+            canvas.drawCircle(localCx, localCy, radius * deadZoneFraction, paintDeadZone)
+            canvas.drawLine(localCx - radius, localCy, localCx + radius, localCy, paintCross)
+            canvas.drawLine(localCx, localCy - radius, localCx, localCy + radius, paintCross)
+            if (isActive) canvas.drawLine(localCx, localCy, dotX, dotY, paintLine)
+            canvas.drawCircle(dotX, dotY, if (isActive) 8f else 5f, paintDot)
+            val text = "X:${String.format("%.2f", axisXVal)}  Y:${String.format("%.2f", axisYVal)}"
+            canvas.drawText(text, localCx, localCy + radius + pad + 20f, paintText)
+        }
+    }
+
+    private fun dp(v: Int) = (v * dm.density).toInt()
+}

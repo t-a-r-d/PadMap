@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PadMap</string>
+    <string name="accessibility_service_description">PadMap needs Accessibility access to inject touch gestures into games when controller buttons are pressed.</string>
+</resources>

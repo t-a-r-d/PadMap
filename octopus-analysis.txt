@@ -1,0 +1,421 @@
+OCTOPUS GAMEPAD MAPPER — TECHNICAL ANALYSIS
+============================================
+Analysed: 2026-06-21
+Source: Octopus.apk decompiled with jadx 1.5.1
+Main package: com.chaozhuo.gameassistant
+
+PURPOSE OF THIS DOCUMENT
+-------------------------
+Reverse-engineering Octopus to find techniques PadMap can adopt to improve
+reliability, latency, and multi-touch behaviour. This is a competitive analysis
+only — no Octopus code is being copied.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 1 — HOW OCTOPUS WORKS (8 AREAS)
+═══════════════════════════════════════════════════════════════════════════════
+
+1. INPUT INTERCEPTION
+─────────────────────
+Octopus receives gamepad events through the same AccessibilityService / key
+filter mechanism PadMap uses, but the main package is heavily obfuscated.
+
+Key files:
+  c3/c.java       — ConvertManager, routes events to handlers
+  h3/a.java       — GamepadAxisProcessor, dead zone + axis reading
+  h3/c.java       — Sensitivity curve logic
+
+Event routing:
+  onGenericMotionEvent  → joystick/trigger axes (AXIS_X/Y/Z/RZ/HAT_X/HAT_Y/LTRIGGER/RTRIGGER)
+  onKeyEvent            → all button keycodes (A/B/X/Y/LB/RB/L3/R3/Start/Select)
+  FLAG_REQUEST_FILTER_KEY_EVENTS managed dynamically (same pattern as PadMap v50)
+
+Axis constants used (h3/c.java):
+  AXIS_X  = 0    left stick X
+  AXIS_Y  = 1    left stick Y
+  AXIS_Z  = 11   right stick X
+  AXIS_RZ = 14   right stick Y
+  AXIS_HAT_X = 15   D-pad X
+  AXIS_HAT_Y = 16   D-pad Y
+  AXIS_LTRIGGER = 23
+  AXIS_RTRIGGER = 22
+
+
+2. GESTURE INJECTION — THE CRITICAL DIFFERENCE
+───────────────────────────────────────────────
+Octopus does NOT use AccessibilityService.dispatchGesture() at all.
+
+Primary method: InputManager.injectInputEvent() via reflection
+  File: com/chaozhuo/gameassistant/czkeymap/b0.java, lines 256–273
+  File: f9/a.java  — reflection cache for InputManager.getInstance and injectInputEvent
+
+  Simplified version of their injection call:
+    inputManager = InputManager.getInstance()  // via reflection
+    inputManager.injectInputEvent(motionEvent, 0)  // 0 = ASYNC mode
+
+  They obtain a real InputManager instance, then call injectInputEvent() directly.
+  This is the same hidden API that PadMap's Shizuku TouchUserService uses, but
+  Octopus calls it from a normal app process using reflection tricks — without
+  needing Shizuku. This works because:
+    a) On older Android they use a socket IPC to a companion process running at
+       elevated privilege.
+    b) On Android 8.0+ they use a VirtualCore (virtual app space) if available,
+       falling back to direct reflection.
+    c) The reflection is wrapped with HiddenApiBypass-style tricks in f9/a.java.
+
+Fallback for pre-Android 8.0: socket IPC to z.l() service (z/l.java).
+
+Key insight: Octopus injects events SYNCHRONOUSLY with no callback wait.
+  dispatchGesture() fires and you wait for onCompleted before the next stroke.
+  injectInputEvent() returns immediately. The next inject call can follow in
+  0ms if needed. This is why Octopus stick movement has lower latency.
+
+
+3. STICK / JOYSTICK HANDLING
+─────────────────────────────
+Dead zone (h3/a.java, fields f6860o / f6861p / f6862q / f6863r):
+  Left stick deadzone inner:  0.15 (same as PadMap)
+  Left stick deadzone outer:  1.0
+  Right stick deadzone inner: 0.15
+  Right stick deadzone outer: 1.0
+
+Sensitivity curve (h3/c.java, method p()):
+  if (abs(v) <= innerDeadzone) return 0
+  if (abs(v) >= outerDeadzone) return sign(v)
+  return sign(v) * (abs(v) - inner) / (outer - inner)   ← linear remap
+
+  This is identical to PadMap's radialDeadZone() — remaps [deadzone, 1.0] to [0, 1].
+  No quadratic curve is applied. PadMap already does this correctly.
+
+Trigger handling: LT/RT are read as axis values (LTRIGGER/RTRIGGER). A threshold
+  of ~0.5 is used to treat them as binary button events. Their axis value is also
+  optionally used for variable-pressure injection (not critical for most games).
+
+
+4. STICK GESTURE LOOP — THE TIMER-DRIVEN APPROACH
+───────────────────────────────────────────────────
+This is the biggest architectural difference from PadMap's dispatchGesture path.
+
+File: k3/b.java (KeyMappingEventHandler) + k3/b.java inner class a (Handler loop)
+
+Loop structure (k3/b.java.a, lines 83–108):
+  - Android Handler fires a Runnable every 16–17ms (~60fps, or up to 8ms at 120fps)
+  - Each tick calls L() which:
+      if (dragging) {
+          inject ACTION_MOVE with current X/Y coords
+          currentX += deltaX * speed
+          currentY += deltaY * speed
+      } else {
+          inject ACTION_DOWN at zone centre
+          dragging = true
+      }
+  - On stick release: inject ACTION_UP at current coords
+
+This is a simple timer → inject loop. No waiting, no callbacks.
+
+The timer interval tracks its own execution time and self-throttles to stay
+near 16ms. If a tick takes 20ms, the next fires immediately to catch up.
+
+Continuous drag implementation (k3/b.java method L(), lines 319–341):
+  The gesture state machine is entirely self-managed:
+    - DOWN sent once on first tick above deadzone
+    - MOVE sent every tick while above deadzone
+    - UP sent once on first tick below deadzone (after latch/coast expiry)
+
+  No GestureDescription, no StrokeDescription, no continueStroke().
+  Just raw MotionEvent ACTION_DOWN / ACTION_MOVE / ACTION_UP in sequence.
+
+
+5. TRUE MULTI-TOUCH
+────────────────────
+File: f3/d.java (MotionEventControl)
+
+Octopus manages 12 simultaneous pointer slots:
+  MotionEvent.PointerProperties[12] — one per pointer, each with id + toolType
+  MotionEvent.PointerCoords[12]     — one per pointer, each with x, y, pressure, size
+
+When multiple zones are active simultaneously (left stick + right stick + button A):
+  - Each zone holds one pointer slot (identified by a pointer ID)
+  - Each tick, ALL active pointers are packed into ONE MotionEvent
+  - That single event carries ACTION_MOVE and lists all active coordinates
+  - This is how Android's multi-touch protocol works natively
+
+Multi-pointer action encoding (f3/d.java line 283):
+  Down:  action = MotionEvent.ACTION_DOWN           (first pointer)
+         action = (pointerIndex << 8) | ACTION_POINTER_DOWN  (subsequent pointers)
+  Move:  action = MotionEvent.ACTION_MOVE  (covers ALL pointers in the event)
+  Up:    action = (pointerIndex << 8) | ACTION_POINTER_UP  (removing a pointer)
+         action = MotionEvent.ACTION_UP             (last pointer)
+
+WHY THIS MATTERS:
+  Games that use multi-touch (two thumbsticks, or stick + button simultaneously)
+  typically call event.getPointerCount() and iterate all pointers in one event.
+  If you send separate events for each pointer, the game may not register them as
+  concurrent touches — it depends on how fast you can send them.
+
+  With injectInputEvent() the combined single-event approach is the cleanest and
+  most compatible method.
+
+
+6. TOOL_TYPE_FINGER — ALREADY IMPLEMENTED IN PADMAP
+─────────────────────────────────────────────────────
+Octopus sets TOOL_TYPE_FINGER explicitly in PointerProperties for every injected
+event. This ensures games that call MotionEvent.getToolType() receive a genuine
+finger event.
+
+PadMap already does this in TouchUserService.kt (line 73):
+  toolType = MotionEvent.TOOL_TYPE_FINGER
+
+PadMap's dispatchGesture() path does NOT do this — dispatchGesture() always
+produces TOOL_TYPE_UNKNOWN. This is a known limitation of the Accessibility API.
+
+
+7. OVERLAY SYSTEM
+──────────────────
+File: com/chaozhuo/gameassistant/czkeymap/view/FloatView.java
+
+Type: TYPE_APPLICATION_OVERLAY (2038) on Android 8.0+, TYPE_SYSTEM_ALERT on older.
+Flags when input passthrough:  FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCH_MODAL (808)
+Flags when capturing input:    FLAG_NOT_TOUCH_MODAL removed (131872)
+
+Octopus uses requestPointerCapture() (API 26+) to capture raw pointer events
+directly into the overlay when in config mode. This is unrelated to game injection.
+
+PadMap's overlay is architecturally similar — no change needed here.
+
+
+8. ZONE DATA MODEL
+───────────────────
+Files: GamePadInfo.java, ModeConfig.java, GamePadConfig.java, KeyMappingInfo.java
+
+Structure mirrors PadMap's:
+  KeyMappingInfo.keyCode  →  MappingEntry.inputName
+  KeyMappingInfo.x, y     →  TouchAction.Tap.x, y
+  KeyMappingInfo.distance →  TouchAction.Drag.radius
+  GamePadConfig.deadzoneLL →  TouchAction.Drag.deadZone
+
+No structural improvements to adopt here — PadMap's data model is equivalent.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 2 — PADMAP CURRENT STATE VS OCTOPUS
+═══════════════════════════════════════════════════════════════════════════════
+
+COMPARISON TABLE
+─────────────────
+Feature                         PadMap (v50)                    Octopus
+─────────────────────────────────────────────────────────────────────────────
+Tap injection (Shizuku)         injectInputEvent() ✓            injectInputEvent() ✓
+Tap injection (no Shizuku)      dispatchGesture() ✓             N/A (always uses inject)
+Stick injection (Shizuku)       dispatchGesture() ✗ (fallback)  injectInputEvent() ✓
+Stick injection (no Shizuku)    dispatchGesture() ✓             N/A
+TOOL_TYPE_FINGER (taps)         ✓ (Shizuku path only)           ✓ always
+TOOL_TYPE_FINGER (sticks)       ✗ (dispatchGesture limitation)  ✓ always
+Multi-touch (combined event)    ✗ (separate strokes/events)     ✓ single MotionEvent
+Timer-driven stick loop         ✗ (callback-driven)             ✓ 16ms Handler
+Latch mode                      ✓ v50                           N/A (different design)
+Coast mode                      ✓ v50                           N/A (different design)
+Dead zone remap                 ✓ radialDeadZone()              ✓ identical algorithm
+Dynamic interception flags      ✓ v50                           ✓ equivalent
+
+
+KEY GAPS IN PADMAP
+───────────────────
+
+GAP 1: STICK MOVEMENT USES dispatchGesture() EVEN WHEN SHIZUKU IS READY
+  PadMap's Shizuku path (TouchUserService) only handles taps (pointerDown/pointerUp).
+  Stick drag (the continueStroke chain) still goes through dispatchGesture() on all
+  paths. This means stick movement always has callback latency and always produces
+  TOOL_TYPE_UNKNOWN.
+
+  Impact: Stick movement latency is ~16–33ms higher than necessary when Shizuku
+  is available. Games that check getToolType() reject stick drag events entirely.
+
+GAP 2: NO COMBINED MULTI-TOUCH EVENT
+  When left stick + right stick + a button are active simultaneously:
+  - dispatchGesture() path: separate StrokeDescriptions in one GestureDescription.
+    Android docs note a maximum of 2 simultaneous strokes in some API versions.
+  - Shizuku path (taps): separate pointerDown() calls = separate MotionEvents.
+    These arrive as individual events, not as a single multi-pointer MotionEvent.
+
+  Impact: Games expecting simultaneous multi-touch may not register all pointers
+  as truly concurrent — particularly on games using getPointerCount() checks.
+
+GAP 3: CALLBACK-DRIVEN TICK RATE FOR STICKS
+  PadMap's masterTick() only fires the next tick inside the onCompleted callback
+  of the previous dispatchGesture(). Callback delivery time depends on system load.
+
+  Impact: Effective stick update rate is unpredictable and can drop below 30fps
+  under load. Octopus fires a fixed 16ms timer regardless of injection success.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 3 — RECOMMENDED IMPROVEMENTS FOR PADMAP
+═══════════════════════════════════════════════════════════════════════════════
+
+IMPROVEMENT 1 — STICK INJECTION VIA SHIZUKU (HIGH PRIORITY)
+─────────────────────────────────────────────────────────────
+Extend TouchUserService and ITouchService.aidl to support stick movement.
+
+New AIDL methods needed:
+  void pointerMove(int pointerId, float x, float y);
+  // Injects ACTION_MOVE for an already-down pointer.
+  // Called every ~16ms while stick is active.
+
+New AIDL method for multi-pointer combine (see Improvement 2):
+  void batchMove(in int[] pointerIds, in float[] xs, in float[] ys);
+  // Injects a single ACTION_MOVE covering all active pointers at once.
+
+In PadMapAccessibilityService, when ShizukuManager.isReady:
+  - Skip the dispatchGesture() / continueStroke path for sticks entirely.
+  - Instead: on stick start → pointerDown(stickPointerId, centerX, centerY)
+             every tick → pointerMove(stickPointerId, newX, newY)
+             on stick end → pointerUp(stickPointerId, lastX, lastY)
+
+Timer for Shizuku stick loop:
+  Use a HandlerThread (not a coroutine) ticking every 16ms.
+  On each tick: read current axis values, calculate new coordinates,
+  call pointerMove() or batchMove().
+  This matches Octopus's Handler-based approach and is not callback-dependent.
+
+  HandlerThread("PadMapStickLoop") → Handler → postDelayed(runnable, 16)
+  Within the runnable: build coords, call batchMove(), reschedule self.
+  Stop when all sticks have been released.
+
+
+IMPROVEMENT 2 — TRUE MULTI-TOUCH COMBINED EVENT (HIGH PRIORITY)
+─────────────────────────────────────────────────────────────────
+Add a batchMove() method to TouchUserService that combines all active pointers
+into a single MotionEvent:
+
+  fun batchMove(pointerIds: IntArray, xs: FloatArray, ys: FloatArray) {
+      val count = pointerIds.size
+      val props  = Array(count) { MotionEvent.PointerProperties().apply {
+          id = pointerIds[it]; toolType = MotionEvent.TOOL_TYPE_FINGER
+      }}
+      val coords = Array(count) { MotionEvent.PointerCoords().apply {
+          x = xs[it]; y = ys[it]; pressure = 1f; size = 1f
+      }}
+      val event = MotionEvent.obtain(
+          downTimes[pointerIds[0]] ?: SystemClock.uptimeMillis(),
+          SystemClock.uptimeMillis(),
+          MotionEvent.ACTION_MOVE,
+          count, props, coords,
+          0, 0, 1f, 1f, 0, 0,
+          InputDevice.SOURCE_TOUCHSCREEN, 0
+      )
+      inject(event)
+      event.recycle()
+  }
+
+Pointer lifecycle for multi-touch:
+  First pointer active:      ACTION_DOWN
+  Additional pointer added:  (pointerIndex << 8) | ACTION_POINTER_DOWN
+  All pointers moving:       ACTION_MOVE  (single event, all coords inside)
+  One pointer removed:       (pointerIndex << 8) | ACTION_POINTER_UP
+  Last pointer removed:      ACTION_UP
+
+  downTimes must track one entry per pointer — the batchMove needs the first
+  pointer's downTime for the event's downTime field.
+
+Also add to TouchUserService:
+  fun pointerMove(pointerId: Int, x: Float, y: Float): Boolean
+  // Single-pointer ACTION_MOVE, for when only one zone is active.
+  // Simpler than batchMove but same principle.
+
+
+IMPROVEMENT 3 — STICK LOOP AS HANDLER THREAD, NOT COROUTINE (MEDIUM)
+───────────────────────────────────────────────────────────────────────
+Current PadMap coroutine approach (scope.launch + delay()) is fine for taps but
+not ideal for the stick loop because delay() uses the Kotlin scheduler which can
+slip under load.
+
+For Shizuku stick injection, use Android's HandlerThread instead:
+  val stickThread = HandlerThread("PadMapStickLoop", Process.THREAD_PRIORITY_URGENT_DISPLAY)
+  stickThread.start()
+  val stickHandler = Handler(stickThread.looper)
+
+  THREAD_PRIORITY_URGENT_DISPLAY (-8 priority) matches what Android uses for
+  rendering and input. This keeps the stick loop from being preempted during
+  heavy CPU load in the game — the same technique Octopus's loop uses.
+
+  Each tick: stickHandler.postDelayed(stickRunnable, 16)
+  The runnable reads axisValues, calls batchMove(), reschedules.
+
+
+IMPROVEMENT 4 — KEEP dispatchGesture() FOR NON-SHIZUKU DEVICES (NO CHANGE)
+─────────────────────────────────────────────────────────────────────────────
+All three improvements above are Shizuku-path only. If Shizuku is not ready,
+PadMap falls back to the existing dispatchGesture() + continueStroke() path,
+which is the best available option without elevated privilege. No changes needed
+to that path — the Latch/Coast features added in v50 are already the correct
+approach for smoothing over its callback latency.
+
+
+IMPROVEMENT 5 — WHAT NOT TO DO (DON'T ADOPT)
+──────────────────────────────────────────────
+Octopus's socket IPC + companion elevated-privilege service approach:
+  This is the same goal as Shizuku but implemented as a custom privileged server.
+  Shizuku is the standard, public, user-consented way to achieve the same thing.
+  PadMap already has the better solution.
+
+Octopus's HiddenApiBypass reflection trick to call injectInputEvent() from a
+normal app process (without Shizuku):
+  On Android 10+ this is increasingly unreliable. Google's hidden API enforcement
+  tightens each release. Attempting this in PadMap would be fragile and could
+  silently fail on newer devices. The Shizuku path is the correct long-term
+  solution — Octopus will eventually break on the reflection approach.
+
+Octopus's VirtualCore integration:
+  VirtualCore is a virtual app space (like Parallel Space). It adds huge complexity
+  and is not relevant to PadMap's use case. Ignore.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 4 — IMPLEMENTATION PRIORITY ORDER
+═══════════════════════════════════════════════════════════════════════════════
+
+Priority 1 (biggest gain, clear path):
+  Extend ITouchService.aidl with pointerMove() and batchMove().
+  Implement in TouchUserService.
+  Add a 16ms HandlerThread loop in PadMapAccessibilityService (Shizuku path).
+  Route stick movement through this path when ShizukuManager.isReady.
+  Result: stick latency drops from ~33–50ms to ~16ms when Shizuku available.
+          TOOL_TYPE_FINGER on stick events — games that rejected sticks may work.
+
+Priority 2 (correct multi-touch):
+  Use batchMove() to combine all active pointers into a single MotionEvent.
+  Track pointer lifecycle correctly (POINTER_DOWN / POINTER_UP actions).
+  Result: left stick + right stick + buttons work simultaneously in all games.
+
+Priority 3 (Shizuku hold/button refinement):
+  Apply the same batchMove() logic to simultaneous button holds.
+  Currently pointerDown() sends individual events — combine them.
+
+Priority 4 (non-Shizuku path — already good):
+  The existing dispatchGesture() path with V13 continueStroke + Latch/Coast (v50)
+  is close to optimal for what AccessibilityService can do. No major changes needed.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 5 — SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+PadMap's architecture is sound. The Shizuku UserService approach is actually
+superior to Octopus's reflection tricks in terms of reliability and long-term
+Android compatibility.
+
+The main gap is that PadMap has only used the Shizuku path for simple taps, while
+leaving stick movement (the harder, more latency-sensitive part) on the slower
+dispatchGesture() path. Octopus routes everything — taps, sticks, simultaneous
+multi-touch — through direct injectInputEvent() with a fixed-rate timer loop and
+proper multi-pointer MotionEvent encoding.
+
+Closing that gap means:
+  1. Teaching TouchUserService about ACTION_MOVE and combined multi-pointer events.
+  2. Running a Handler-based timer loop for stick updates (not callback-driven).
+  3. Keeping dispatchGesture() as the fallback for users without Shizuku.
+
+No changes to the dead zone algorithm, latch/coast, overlay, or data model are
+needed — PadMap's implementations of these are equivalent to or better than
+Octopus's.
