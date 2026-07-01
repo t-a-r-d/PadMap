@@ -188,7 +188,7 @@ Rules:
 - Items numbered continuously across the whole checklist. Format: `01. [ ]` (zero-padded so checkboxes align)
 - Every changed feature must have at least one checklist item
 - ADDITIONAL TASKS — blank slots only. Never pre-fill. Damien writes new tasks here during testing
-- PENDING / DEFERRED — Damien's section only. CC never adds or removes items. Carry forward every build
+- PENDING / DEFERRED is tracked in `pending-deferred.md` in the project root. When writing build notes, read that file and copy all items verbatim. When Damien defers an item, add it to `pending-deferred.md` immediately and commit. Never remove an item unless Damien explicitly says to
 - NAMED STYLES — permanent section at the end. Carry all entries forward every build
 
 ---
