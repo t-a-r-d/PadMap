@@ -147,7 +147,7 @@ Q&A RESPONSES
 TEST CHECKLIST — v<N>
 ---------------------
 FEATURE HEADING
-1. [ ] <action> → <expected result>
+01. [ ] <action> → <expected result>
 
 
 ADDITIONAL TASKS
@@ -178,7 +178,7 @@ NAMED STYLES
 
 Rules:
 - Group checklist items by feature — one ALLCAPS heading per group. Be specific: "LEFT STICK — screen zone drag" not just "STICK"
-- Items numbered continuously across the whole checklist. Format: `1. [ ]` (number before checkbox)
+- Items numbered continuously across the whole checklist. Format: `01. [ ]` (zero-padded so checkboxes align)
 - Every changed feature must have at least one checklist item
 - ADDITIONAL TASKS — blank slots only. Never pre-fill. Damien writes new tasks here during testing
 - PENDING / DEFERRED — Damien's section only. CC never adds or removes items. Carry forward every build
