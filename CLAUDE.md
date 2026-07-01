@@ -124,7 +124,7 @@ Rules:
 ## Android Build
 
 ### Version Number
-Before every APK build, check the downloads folder for the highest existing APK and increment by 1. Never overwrite an existing APK.
+Before every APK build, read `versionCode` from `app/build.gradle` and increment by 1. Update both `versionCode` and `versionName` before running the build. Never overwrite an existing APK.
 
 ### Build Command
 ```bash
@@ -139,11 +139,6 @@ PadMap — Debug Build v<N>
 Built: YYYY-MM-DD
 
 
-WHAT'S NEW IN v<N>
------------------
-<numbered list>
-
-
 Q&A RESPONSES
 -------------
 <Only when tester filled in Q&A previously.>
@@ -151,7 +146,8 @@ Q&A RESPONSES
 
 TEST CHECKLIST — v<N>
 ---------------------
-[ ] <action> → <expected result>
+FEATURE HEADING
+1. [ ] <action> → <expected result>
 
 
 ADDITIONAL TASKS
@@ -174,14 +170,19 @@ Q&A
 
 PENDING / DEFERRED
 ------------------
-- <item> (<reason>)
+
+
+NAMED STYLES
+------------
 ```
 
 Rules:
-- Group checklist items by feature — one heading per group
-- Checklist titles must be specific: "LEFT STICK — Map to screen left zone → drag follows stick X/Y" not just "STICK"
+- Group checklist items by feature — one ALLCAPS heading per group. Be specific: "LEFT STICK — screen zone drag" not just "STICK"
+- Items numbered continuously across the whole checklist. Format: `1. [ ]` (number before checkbox)
 - Every changed feature must have at least one checklist item
-- Carry PENDING / DEFERRED forward to every build — never drop an item unless told to
+- ADDITIONAL TASKS — blank slots only. Never pre-fill. Damien writes new tasks here during testing
+- PENDING / DEFERRED — Damien's section only. CC never adds or removes items. Carry forward every build
+- NAMED STYLES — permanent section at the end. Carry all entries forward every build
 
 ---
 
