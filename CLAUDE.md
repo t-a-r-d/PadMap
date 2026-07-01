@@ -80,6 +80,13 @@ Rules:
 
 ## CRITICAL — Code Change Rules
 
+- **SURGICAL CHANGES ONLY. Touch nothing outside the exact lines requested.**
+  Before editing any file, state explicitly what you will change and what you will not touch.
+  Do not reformat, rename, reorder, tidy, or "improve" any surrounding code.
+  Do not change icons, colours, styles, layouts, or logic that were not explicitly requested.
+  If something looks wrong but was not flagged — leave it alone and flag it to Damien instead.
+  Violations of this rule have cost Damien 50+ hours of rework. It is the most important rule in this file.
+
 - **`@~` markers in debug notes are mandatory instructions.** Every single `@~` item must be acted upon — none may be omitted, deferred, or ignored.
 
 - **Read the entire debug notes document before writing any code.**
