@@ -35,6 +35,11 @@ Rules:
 - Keep asking after each round of changes until Damien explicitly says to build ("build it", "go ahead", "yes", "nothing else").
 - Do not interpret silence, "continue", or any ambiguous reply as permission to build.
 - Only start the build — bump version code, run Gradle, copy APK — after Damien has clearly confirmed.
+- A crash log, bug report, "fix this", "hotfix", or finishing a code fix is **not** build approval.
+  Correct sequence: fix → commit → ask → wait.
+- **Incident 2026-08-07 (grok/M3DIA, applies to all projects):** after a crash fix the agent
+  bumped version and started assembleDebug without "build it". Fireable rule break. See
+  `~/GROK_CONTEXT.md`.
 
 ---
 
