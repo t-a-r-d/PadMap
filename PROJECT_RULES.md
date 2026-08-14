@@ -1,4 +1,6 @@
-# PadMap — Project Brief for Claude Code
+# PadMap — Project Rules
+
+Applies to every AI working on this repo (gpt, grok, or any later agent).
 
 ## Project Overview
 
@@ -23,11 +25,11 @@ Native Android gamepad mapper app. Maps physical gamepad inputs (buttons, sticks
 
 ## Pre-Build Check-In — MANDATORY
 
-Before bumping the version code and running any APK build, cc must ask Damien:
+Before bumping the version code and running any APK build, the active AI must ask Damien:
 
 > "Is there anything else you'd like to add before the APK is built?"
 
-**CC must never build the APK without Damien's explicit permission.**
+**Never build the APK without Damien's explicit permission.**
 
 Rules:
 - After asking, wait for Damien's response.
@@ -71,7 +73,7 @@ Rules:
 
 - **Do not batch multiple fixes into one build unless they are independently verified to be correct.** Prefer one targeted fix per build.
 
-- **CC cannot run the app and cannot verify fixes at runtime.** Every "fix" is a code-level correction only. The only verification is the user testing the APK.
+- **The active AI cannot run the app and cannot verify fixes at runtime.** Every "fix" is a code-level correction only. The only verification is Damien testing the APK.
 
 - **Before calling any shared function, read its full implementation.** Never assume a function does only what its name suggests.
 
@@ -96,7 +98,7 @@ Rules:
 
 - **Read the entire debug notes document before writing any code.**
 
-- **Generate an interpretation document before coding (when requested).** Save as `PadMap-debug-v<N>-cc_interpretation_nts1.txt` in the same directory as the debug notes. The document is iterative: `nts1`, `nts2`, etc.
+- **Generate an interpretation document before coding (when requested).** Save as `PadMap-debug-v<N>-interpretation_nts1.txt` in the same directory as the debug notes. The document is iterative: `nts1`, `nts2`, etc.
 
 - **Interpretation notes are optional — follow Damien's instructions.** If Damien does NOT request interpretation notes: code the changes first, then ask the mandatory pre-build check-in question before building.
 
@@ -106,7 +108,7 @@ Rules:
 
 - **Pre-fill answer slots in the interpretation document Q&A.** Format each as `A<N>:` immediately below the question.
 
-- **The PENDING / DEFERRED section belongs to Damien — CC never adds or removes items.**
+- **The PENDING / DEFERRED section belongs to Damien — AIs never add or remove items.**
 
 - **NEVER change code that was not explicitly requested.**
 
@@ -200,7 +202,7 @@ Rules:
 
 ## Documentation-First Development Rule
 
-Before writing any code for a native Android feature, CC must:
+Before writing any code for a native Android feature, the active AI must:
 1. Read the official Android documentation for that feature.
 2. Search for real-world implementation examples.
 3. Save a reference to `~/appProjects/PadMap/dev-refs/<topic>.md`.
