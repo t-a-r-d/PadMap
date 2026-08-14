@@ -1,8 +1,7 @@
-# PadMap — Project Rules
+# PadMap — project-specific
 
-Applies to every AI working on this repo (gpt, grok, or any later agent).
-
-Universal hard gates live in `~/PROJECTS_CONTEXT.md`. Do not duplicate them here.
+**SHELVED.** Do not read this file unless Damien opened `~/appProjects/PadMap/` this session.
+Global rules: `~/PROJECT_RULES.md`.
 
 ## Overview
 
