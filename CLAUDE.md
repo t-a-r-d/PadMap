@@ -8,7 +8,7 @@ Native Android gamepad mapper app. Maps physical gamepad inputs (buttons, sticks
 - Package: TBD (check app/build.gradle)
 - APK output: `/mnt/chromeos/MyFiles/Downloads/appProjects/PadMap/`
 - APK name: `PadMap-debug-v<N>.apk`
-- Notes file: `PadMap-debug-v<N>-notes.txt`
+- Notes file: `PadMap-debug-v<N>-notes.txt` — **only when Damien explicitly asks**. Do not create notes automatically with each APK.
 
 ## Platform & Tech
 
