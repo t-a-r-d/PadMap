@@ -399,11 +399,15 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
 }
 
 internal fun bestInjectorLog(preferred: String?): String {
+    val progress = setOf(
+        "Starting injector…", "Installing injector…", "Looking for wireless debugging…",
+        "Connecting ADB…", "Injector not started", "Injector running", "Paired", "Pairing…"
+    )
     return listOfNotNull(preferred, SidecarHost.lastDump, SidecarHost.status)
         .map { it.trim() }
-        .filter { it.isNotBlank() }
+        .filter { it.isNotBlank() && it !in progress }
         .maxByOrNull { it.length }
-        ?: ""
+        ?: SidecarHost.lastDump.ifBlank { preferred?.trim().orEmpty() }
 }
 
 internal fun shareInjectorLog(ctx: Context, text: String) {

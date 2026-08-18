@@ -111,7 +111,19 @@ object SidecarHost {
             dropAdb(context)
             return true
         }
-        if (inProgress) return false
+        if (inProgress) {
+            if (!force) return false
+            val waitUntil = System.currentTimeMillis() + 25_000L
+            while (inProgress && System.currentTimeMillis() < waitUntil) {
+                Thread.sleep(100)
+            }
+            if (SidecarClient.ping()) {
+                status = "Injector running"
+                dropAdb(context)
+                return true
+            }
+            if (lastDump.isNotBlank()) throw IllegalStateException(lastDump)
+        }
         if (!hasPaired(context)) {
             status = "First-time pair needed"
             return false
@@ -211,9 +223,15 @@ object SidecarHost {
         shell(mgr, "chmod 644 $remote")
         shell(mgr, "kill \$(cat $REMOTE_PID) 2>/dev/null; true")
         status = "Starting injector…"
-        launchDetached(mgr)
+        try {
+            launchDetached(mgr)
+        } catch (t: Throwable) {
+            lastLaunchNotes = lastLaunchNotes + " launch threw ${t.message}\n"
+        }
         if (!waitForPing(4000)) {
-            val detail = diagnose(mgr)
+            val detail = runCatching { diagnose(mgr) }.getOrElse { e ->
+                refusedExplain() + " Diagnose failed: ${e.message}. Launch: ${lastLaunchNotes.trim()}"
+            }
             status = detail
             lastDump = detail
             throw IllegalStateException(detail)
