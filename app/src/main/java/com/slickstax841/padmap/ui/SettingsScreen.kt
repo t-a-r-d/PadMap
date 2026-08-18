@@ -79,7 +79,6 @@ private fun InjectorCard(skin: AppSkin) {
     val scope = rememberCoroutineScope()
     var code by remember { mutableStateOf("") }
     var pairPort by remember { mutableStateOf("") }
-    var connectPort by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(SidecarClient.isAvailable) }
     var paired by remember { mutableStateOf(SidecarHost.hasPaired(ctx)) }
@@ -131,24 +130,14 @@ private fun InjectorCard(skin: AppSkin) {
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = pairPort,
-                    onValueChange = { pairPort = it.filter { ch -> ch.isDigit() || ch == '.' || ch == ':' } },
-                    label = { Text("Paste IP:port from pair dialog") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.weight(1f)
-                )
-                OutlinedTextField(
-                    value = connectPort,
-                    onValueChange = { connectPort = it.filter { ch -> ch.isDigit() || ch == '.' || ch == ':' } },
-                    label = { Text("Connect IP:port (auto)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.weight(1f)
-                )
-            }
+            OutlinedTextField(
+                value = pairPort,
+                onValueChange = { pairPort = it.filter { ch -> ch.isDigit() || ch == '.' || ch == ':' } },
+                label = { Text("Paste IP:port from pair dialog (if auto-find fails)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth()
+            )
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -195,13 +184,8 @@ private fun InjectorCard(skin: AppSkin) {
                                             ?: error("Could not find pairing port. Paste the IP:port from the same open popup.")
                                     }
                                     SidecarHost.pair(ctx, pairEp.host, pairEp.port, code)
-                                    val connEp = if (connectPort.isNotBlank()) {
-                                        com.slickstax841.padmap.inject.AdbEndpoint.parse(connectPort)
-                                            ?: error("Connect address should look like 192.168.0.12:5555")
-                                    } else {
-                                        NsdAdbFinder.findWithRetry(ctx, pairing = false)
-                                            ?: error("Could not find wireless debugging port.")
-                                    }
+                                    val connEp = NsdAdbFinder.findWithRetry(ctx, pairing = false)
+                                        ?: error("Paired, but could not find the wireless-debug connect port. Leave Wireless debugging ON and try again.")
                                     SidecarHost.start(ctx, connEp.host, connEp.port)
                                 }
                             }
