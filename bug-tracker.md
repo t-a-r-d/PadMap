@@ -92,6 +92,7 @@ v65 overlay DEBUG on Shadowborn (`com.onemb.shadowborn`): play catcher focused, 
 - [ok] v66 Shadowborn: `ping=true` `down ok=true`. Inject reaches the game. Stick only nudged; four buttons at once kept tapping one button.
 - [in progress] v66 dump: same pointer ids reused (`B`/`X`/`Y`/`stick` on pid=0/2), no `btn up`, play catcher torn down mid-game (`play catcher focused=true` twice). `TYPE_WINDOWS_CHANGED` treats a focused System UI window as leaving the game and destroys the catcher — key-ups never arrive, HOLD/REPEAT never stop, stick is released. Extra DOWNs then recycle the same pointer. Next: ignore System UI flashes, do not reuse an in-use pointer id, ignore a second DOWN while that button is already held, keep the stick down across a short dead-zone blip.
 - [ok] v67: buttons and move-stick work. Look stick not tried. First-screen hang + low icon is BUG-008.
+- [in progress] Requesting `motionEventSources` JOYSTICK|GAMEPAD always meant the game never saw analog (built-in R-stick look died with no look zone). Only request stick motion when a stick zone has override. Assigned buttons still consume that key so in-game A cannot fire.
 
 ### Not tried
 

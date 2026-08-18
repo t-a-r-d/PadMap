@@ -343,13 +343,18 @@ class PadMapAccessibilityService : AccessibilityService() {
         val info = serviceInfo ?: return
         val flagKey = android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
         val configOpen = OverlayManager.instance?.state == OverlayManager.State.CONFIG
-        val mappedGame = playingPackage.isNotBlank() &&
-            DataStore.activeLayout?.mappings?.any { it.inputName.isNotBlank() && it.overrideGame } == true
-        val wantKeys = configOpen || mappedGame
+        val ov = DataStore.activeLayout?.mappings.orEmpty()
+            .filter { it.inputName.isNotBlank() && it.overrideGame }
+        val wantKeys = configOpen || (playingPackage.isNotBlank() && ov.any { it.action is TouchAction.Tap })
+        val wantStick = configOpen || (playingPackage.isNotBlank() && ov.any { it.action is TouchAction.Drag })
         val newFlags = if (wantKeys) info.flags or flagKey else info.flags and flagKey.inv()
         info.flags = newFlags
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            info.motionEventSources = InputDevice.SOURCE_JOYSTICK or InputDevice.SOURCE_GAMEPAD
+            // Requested motion sources are NOT delivered to the game. Only take
+            // sticks when a stick zone is overriding; otherwise built-in look works.
+            info.motionEventSources = if (wantStick)
+                InputDevice.SOURCE_JOYSTICK or InputDevice.SOURCE_GAMEPAD
+            else 0
         }
         // Always write back. ColorOS drops key/motion delivery on game start;
         // assigning serviceInfo again is what overlay ✕ restores (BUG-008).
@@ -396,8 +401,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
                 if (event.repeatCount > 0) return true
-                if (!sidecarReady()) return false
-                onButtonDown(label)
+                if (sidecarReady()) onButtonDown(label)
                 return true
             }
             KeyEvent.ACTION_UP -> {
