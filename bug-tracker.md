@@ -94,6 +94,23 @@ Not confirmed on device. Code paths that drop playback:
 
 - Device confirmation after the next APK.
 
+---
+
+## BUG-005 — Menu icon goes off the top after landscape overlay / portrait
+
+**Status:** in progress
+**Reported:** 2026-08-18
+
+Floating config button disappears off the top when overlay size was set in landscape and the game (or phone) is portrait. Icon must sit at the current screen’s top-centre, not overlay W/H/X/Y. After deleting a game layout in PadMap, the next time that game opens the button should start at top-centre.
+
+### Attempts
+
+- [in progress] Pin the icon with `Gravity.TOP|CENTER_HORIZONTAL` and live window metrics. Never use saved overlay dimensions for the icon. Reset to that pin when a game layout is deleted.
+
+### Not tried
+
+- Device confirmation.
+
 ## How to use this file
 
 When a bug is reported:

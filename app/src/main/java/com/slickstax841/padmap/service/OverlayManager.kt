@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.*
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -72,7 +73,7 @@ class OverlayManager(private val context: Context) {
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
         PixelFormat.TRANSLUCENT
-    ).apply { gravity = Gravity.TOP or Gravity.START; x = -1; y = -1 }  // -1 = not yet positioned
+    ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; x = 0; y = -1 }
 
     // ─── Config overlay ───────────────────────────────────────────────────────
 
@@ -139,17 +140,33 @@ class OverlayManager(private val context: Context) {
         handler.post { iconView?.visibility = View.GONE }
     }
 
+    fun resetIconToTopCenter() {
+        handler.post { pinIconTopCenter(apply = true) }
+    }
+
+    // Icon is a separate window. Never use overlay W/H/X/Y or a stale landscape width.
+    private fun pinIconTopCenter(apply: Boolean) {
+        val topInset = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            wm.currentWindowMetrics.windowInsets
+                .getInsets(android.view.WindowInsets.Type.statusBars()).top
+        } else {
+            val id = context.resources.getIdentifier("status_bar_height", "dimen", "android")
+            if (id > 0) context.resources.getDimensionPixelSize(id) else dp(24)
+        }
+        iconParams.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        iconParams.x = 0
+        iconParams.y = topInset + dp(4)
+        if (apply) {
+            iconView?.let { runCatching { wm.updateViewLayout(it, iconParams) } }
+        }
+    }
+
     // Move icon to title-row position (PadMap app is foreground)
     fun repositionForHome() {
         handler.post {
             val view = iconView ?: return@post
-            view.visibility = View.VISIBLE  // restore if hidden by isSystemUi
-            val screenW = dm.widthPixels
-            val statusBarId = context.resources.getIdentifier("status_bar_height", "dimen", "android")
-            val statusBarH = if (statusBarId > 0) context.resources.getDimensionPixelSize(statusBarId) else dp(24)
-            iconParams.x = screenW / 2 - dp(28)
-            iconParams.y = statusBarH + dp(20)
-            runCatching { wm.updateViewLayout(view, iconParams) }
+            view.visibility = View.VISIBLE
+            pinIconTopCenter(apply = true)
         }
     }
 
@@ -169,12 +186,7 @@ class OverlayManager(private val context: Context) {
                 return@post
             }
             view.visibility = View.VISIBLE
-            val screenW = dm.widthPixels
-            val statusBarId = context.resources.getIdentifier("status_bar_height", "dimen", "android")
-            val statusBarH = if (statusBarId > 0) context.resources.getDimensionPixelSize(statusBarId) else dp(24)
-            iconParams.x = screenW / 2 - dp(28)
-            iconParams.y = statusBarH + dp(4)
-            runCatching { wm.updateViewLayout(view, iconParams) }
+            pinIconTopCenter(apply = true)
         }
     }
 
@@ -242,12 +254,7 @@ class OverlayManager(private val context: Context) {
     private fun showFloatingIcon() {
         if (iconView != null) return
         // First-time position: centered horizontally, in the app title row
-        if (iconParams.x < 0) {
-            val statusBarId = context.resources.getIdentifier("status_bar_height", "dimen", "android")
-            val statusBarH = if (statusBarId > 0) context.resources.getDimensionPixelSize(statusBarId) else dp(24)
-            iconParams.x = dm.widthPixels / 2 - dp(28)
-            iconParams.y = statusBarH + dp(20)
-        }
+        if (iconParams.y < 0) pinIconTopCenter(apply = false)
         val view = ImageView(context).apply {
             setImageResource(R.drawable.padmap_logo)
             scaleType = ImageView.ScaleType.FIT_CENTER

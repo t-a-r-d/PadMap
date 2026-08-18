@@ -346,7 +346,10 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     showEdit = false,
                     onSelect = { DataStore.update { it.copy(activeLayoutId = layout.id) } },
                     onEdit = { onEditLayout(layout.id) },
-                    onDelete = { DataStore.update { it.copy(gameLayouts = it.gameLayouts.filter { l -> l.id != layout.id }) } }
+                    onDelete = {
+                        DataStore.update { it.copy(gameLayouts = it.gameLayouts.filter { l -> l.id != layout.id }) }
+                        OverlayManager.instance?.resetIconToTopCenter()
+                    }
                 )
             }
 
@@ -383,6 +386,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                                     else data.activeLayoutId
                                 )
                             }
+                            OverlayManager.instance?.resetIconToTopCenter()
                         }
                     )
                 }
