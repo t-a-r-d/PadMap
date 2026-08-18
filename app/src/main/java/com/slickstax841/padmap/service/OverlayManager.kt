@@ -9,6 +9,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.*
 import android.widget.*
+import com.slickstax841.padmap.R
 import com.slickstax841.padmap.data.ButtonMode
 import com.slickstax841.padmap.data.ButtonTuningStore
 import com.slickstax841.padmap.data.DataStore
@@ -236,13 +237,11 @@ class OverlayManager(private val context: Context) {
             iconParams.x = dm.widthPixels / 2 - dp(28)
             iconParams.y = statusBarH + dp(20)
         }
-        val view = TextView(context).apply {
-            text = "\u25CE"
-            textSize = 22f
-            setTextColor(Color.parseColor("#00BFFF"))
-            gravity = Gravity.CENTER
-            alpha = 0.5f
-            background = circleDrawable(Color.argb(160, 0, 0, 0), Color.parseColor("#00BFFF"))
+        val view = ImageView(context).apply {
+            setImageResource(R.drawable.padmap_logo)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            adjustViewBounds = false
+            alpha = 0.85f
         }
         var ix = 0; var iy = 0; var tx = 0f; var ty = 0f; var moved = false
         view.setOnTouchListener { _, e ->
@@ -250,12 +249,12 @@ class OverlayManager(private val context: Context) {
                 MotionEvent.ACTION_DOWN -> { ix = iconParams.x; iy = iconParams.y; tx = e.rawX; ty = e.rawY; moved = false; true }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (e.rawX - tx).toInt(); val dy = (e.rawY - ty).toInt()
-                    if (abs(dx) > 8 || abs(dy) > 8) { moved = true; view.alpha = 0.95f }
+                    if (abs(dx) > 8 || abs(dy) > 8) { moved = true; view.alpha = 1f }
                     iconParams.x = ix + dx; iconParams.y = iy + dy
                     iconView?.let { runCatching { wm.updateViewLayout(it, iconParams) } }
                     true
                 }
-                MotionEvent.ACTION_UP -> { view.alpha = 0.5f; if (!moved) enterConfigModeFromIcon(); true }
+                MotionEvent.ACTION_UP -> { view.alpha = 0.85f; if (!moved) enterConfigModeFromIcon(); true }
                 else -> false
             }
         }

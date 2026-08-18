@@ -34,12 +34,14 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.slickstax841.padmap.R
 import com.slickstax841.padmap.data.ControllerPreset
 import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.data.GameLayout
@@ -163,10 +165,18 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
         ) {
             item {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.Top) {
-                    Column {
-                        Text("PAD MAP", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = skin.accent,
-                            letterSpacing = 4.sp, fontFamily = skin.headingFont)
-                        Text("gamepad \u2192 touch mapper", fontSize = 12.sp, color = skin.textSecondary)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Image(
+                            painter = painterResource(R.drawable.padmap_logo),
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text("PAD MAP", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = skin.accent,
+                                letterSpacing = 4.sp, fontFamily = skin.headingFont)
+                            Text("gamepad \u2192 touch mapper", fontSize = 12.sp, color = skin.textSecondary)
+                        }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         TextButton(onClick = {
