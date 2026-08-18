@@ -138,17 +138,20 @@ EXIT on Home calls `disableAndStop()` then `finishAndRemoveTask()`. Swiping the 
 **Status:** in progress
 **Reported:** 2026-08-18 on Oppo A40, PadMap v67
 
-Buttons and move-stick work. On game start the first screen hangs and the menu icon sits slightly lower than usual. Minimise + reopen puts the icon back and some games then load (some never do).
+Buttons and move-stick work. On game start the first screen hangs and the menu icon sits slightly lower than usual. Minimise + reopen puts the icon back and some games then load (some never do). After that reopen, mapped zones do nothing and games with their own controller support also get no pad.
 
 ### Cause
 
 `showPlayCatcher()` adds a focusable `TYPE_ACCESSIBILITY_OVERLAY` and `requestFocus()`. The game never gets window focus, so splash/first activity waits. Status bar stays up; `pinIconTopCenter` then adds the status-bar inset on top of an overlay that is already laid out below the bar, so the icon sits too low. After recents, the game is focused/immersive, inset is 0, icon is correct.
+
+The same catcher `return true`s every gamepad key, so native controller support never sees the pad. Buttons mashed on the hung splash stay in `activeHolds`; recents is treated as System UI (not a leave), so those holds are not released. After reopen, a new press is `already down` and inject is skipped — zones look dead, and `onKeyEvent` still consumes the key.
 
 A11y already delivers pad keys/motion (v67). The catcher is not needed to play.
 
 ### Attempts
 
 - [in progress] Do not add the focusable play catcher. Pin the icon at `y=4dp` with no extra status-bar inset, and re-pin after the game has a moment to go immersive.
+- [in progress] Release playback when leaving a game and when entering one. Only filter keys in a mapped game (or config). Pass the key through if we are not actually injecting. Re-down a stale hold instead of ignoring it.
 
 ### Not tried
 

@@ -79,6 +79,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     var lastGamePackage: String = ""
         private set
     var padMapUiVisible: Boolean = false
+    private var playingPackage: String = ""
 
     private val stickRunnable = object : Runnable {
         override fun run() {
@@ -200,6 +201,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     fun handlePlaybackMotion(event: MotionEvent) {
+        if (playingPackage.isEmpty()) return
         val layout = DataStore.activeLayout
         if (layout == null) {
             PlaybackDebug.logMotion("motion no layout")
@@ -248,47 +250,61 @@ class PadMapAccessibilityService : AccessibilityService() {
                 if (pkg in OverlayManager.TRANSIENT_PACKAGES) return
                 if (pkg == packageName) return
                 foregroundPackage = pkg
-                lastGamePackage = pkg
-                OverlayManager.instance?.repositionForGame(pkg)
-                val layoutMatch = DataStore.data.value.gameLayouts.find { it.packageName == pkg }
-                if (layoutMatch != null) {
-                    if (layoutMatch.archived || DataStore.data.value.activeLayoutId != layoutMatch.id) {
-                        DataStore.update { data ->
-                            data.copy(
-                                gameLayouts = if (layoutMatch.archived)
-                                    data.gameLayouts.map { if (it.id == layoutMatch.id) it.copy(archived = false) else it }
-                                else data.gameLayouts,
-                                activeLayoutId = layoutMatch.id
-                            )
-                        }
-                        updateInputInterception()
+                val isGame = com.slickstax841.padmap.data.GameScanner.isInstalledGame(this, pkg)
+                if (isGame) {
+                    lastGamePackage = pkg
+                    if (playingPackage != pkg) {
+                        releaseAllPlayback()
+                        playingPackage = pkg
+                        PlaybackDebug.log("enter game $pkg")
                     }
-                } else if (com.slickstax841.padmap.data.GameScanner.isInstalledGame(this, pkg)) {
-                    val current = DataStore.activeLayout
-                    if (current != null && current.mappings.isNotEmpty()) {
-                        if (current.packageName.isBlank()) {
+                    OverlayManager.instance?.repositionForGame(pkg)
+                    val layoutMatch = DataStore.data.value.gameLayouts.find { it.packageName == pkg }
+                    if (layoutMatch != null) {
+                        if (layoutMatch.archived || DataStore.data.value.activeLayoutId != layoutMatch.id) {
                             DataStore.update { data ->
-                                data.copy(gameLayouts = data.gameLayouts.map {
-                                    if (it.id == current.id) it.copy(packageName = pkg) else it
-                                })
+                                data.copy(
+                                    gameLayouts = if (layoutMatch.archived)
+                                        data.gameLayouts.map { if (it.id == layoutMatch.id) it.copy(archived = false) else it }
+                                    else data.gameLayouts,
+                                    activeLayoutId = layoutMatch.id
+                                )
                             }
                         }
                     } else {
-                        val appName = try {
-                            packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
-                        } catch (_: Exception) { pkg }
-                        val id = java.util.UUID.randomUUID().toString()
-                        DataStore.update { it.copy(
-                            gameLayouts = it.gameLayouts + GameLayout(
-                                id = id, name = appName, packageName = pkg,
-                                controllerPresetId = it.activePresetId
-                            ),
-                            activeLayoutId = id
-                        )}
-                        OverlayManager.instance?.showToast("Layout created: $appName")
+                        val current = DataStore.activeLayout
+                        if (current != null && current.mappings.isNotEmpty()) {
+                            if (current.packageName.isBlank()) {
+                                DataStore.update { data ->
+                                    data.copy(gameLayouts = data.gameLayouts.map {
+                                        if (it.id == current.id) it.copy(packageName = pkg) else it
+                                    })
+                                }
+                            }
+                        } else {
+                            val appName = try {
+                                packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+                            } catch (_: Exception) { pkg }
+                            val id = java.util.UUID.randomUUID().toString()
+                            DataStore.update { it.copy(
+                                gameLayouts = it.gameLayouts + GameLayout(
+                                    id = id, name = appName, packageName = pkg,
+                                    controllerPresetId = it.activePresetId
+                                ),
+                                activeLayoutId = id
+                            )}
+                            OverlayManager.instance?.showToast("Layout created: $appName")
+                        }
                     }
-                    updateInputInterception()
+                } else {
+                    if (playingPackage.isNotEmpty()) {
+                        releaseAllPlayback()
+                        playingPackage = ""
+                        PlaybackDebug.log("leave game for $pkg")
+                    }
+                    OverlayManager.instance?.repositionForGame(pkg)
                 }
+                updateInputInterception()
             }
         }
     }
@@ -297,7 +313,11 @@ class PadMapAccessibilityService : AccessibilityService() {
     internal fun updateInputInterception() {
         val info = serviceInfo ?: return
         val flagKey = android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
-        val newFlags = info.flags or flagKey
+        val configOpen = OverlayManager.instance?.state == OverlayManager.State.CONFIG
+        val mappedGame = playingPackage.isNotBlank() &&
+            DataStore.activeLayout?.mappings?.any { it.inputName.isNotBlank() } == true
+        val wantKeys = configOpen || mappedGame
+        val newFlags = if (wantKeys) info.flags or flagKey else info.flags and flagKey.inv()
         var changed = info.flags != newFlags
         info.flags = newFlags
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -330,6 +350,7 @@ class PadMapAccessibilityService : AccessibilityService() {
             ControllerEventBus.emitKey(event)
             return false
         }
+        if (playingPackage.isEmpty()) return false
         val label = labelFor(event.keyCode)
         if (label == null) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
@@ -349,6 +370,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
                 if (event.repeatCount > 0) return true
+                if (!sidecarReady()) return false
                 onButtonDown(label)
                 return true
             }
@@ -421,8 +443,8 @@ class PadMapAccessibilityService : AccessibilityService() {
         when (mode) {
             ButtonMode.HOLD -> {
                 if (activeHolds.containsKey(label)) {
-                    PlaybackDebug.log("btn $label already down")
-                    return
+                    PlaybackDebug.log("btn $label re-down")
+                    releaseHold(label)
                 }
                 startHold(label, nonTurbo)
             }
