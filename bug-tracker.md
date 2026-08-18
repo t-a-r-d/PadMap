@@ -129,6 +129,23 @@ EXIT on Home calls `disableAndStop()` then `finishAndRemoveTask()`. Swiping the 
 
 - Device confirmation.
 
+---
+
+## BUG-007 — Auto layouts and menu button appear on non-games
+
+**Status:** in progress
+**Reported:** 2026-08-18
+
+PadMap created presets and showed the overlay button on apps that are not games (CATEGORY_UNDEFINED). Menu button must not show on the Android launcher or non-game apps. Automatic layouts only for packages marked as games.
+
+### Attempts
+
+- [in progress] Use `GameScanner.isInstalledGame` (CATEGORY_GAME / FLAG_IS_GAME, not system) for auto-layout and icon visibility. Hide the button on PadMap Home and any non-game package.
+
+### Not tried
+
+- Device confirmation.
+
 ## How to use this file
 
 When a bug is reported:

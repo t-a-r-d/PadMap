@@ -172,13 +172,9 @@ class OverlayManager(private val context: Context) {
         }
     }
 
-    // Move icon to title-row position (PadMap app is foreground)
+    // PadMap Home is not a game — hide the overlay button.
     fun repositionForHome() {
-        handler.post {
-            val view = iconView ?: return@post
-            view.visibility = View.VISIBLE
-            pinIconTopCenter(apply = true)
-        }
+        handler.post { iconView?.visibility = View.GONE }
     }
 
     // Move icon to top-center (game is foreground); re-assert config overlay focus if open.
@@ -192,7 +188,7 @@ class OverlayManager(private val context: Context) {
                 return@post
             }
             val view = iconView ?: return@post
-            if (isSystemUi(pkg)) {
+            if (!com.slickstax841.padmap.data.GameScanner.isInstalledGame(context, pkg)) {
                 view.visibility = View.GONE
                 return@post
             }
@@ -310,11 +306,7 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun isMappablePackage(pkg: String): Boolean {
-        if (pkg.isBlank()) return false
-        if (pkg == context.packageName) return false
-        if (pkg in BLOCKED_PACKAGES) return false
-        if (isSystemLauncher(pkg)) return false
-        return true
+        return com.slickstax841.padmap.data.GameScanner.isInstalledGame(context, pkg)
     }
 
     // Icon tap path — auto-detect the current game

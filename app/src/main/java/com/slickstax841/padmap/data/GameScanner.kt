@@ -41,6 +41,17 @@ object GameScanner {
         return info.flags and ApplicationInfo.FLAG_IS_GAME != 0
     }
 
+    fun isInstalledGame(context: Context, pkg: String): Boolean {
+        if (pkg.isBlank()) return false
+        if (pkg == context.packageName) return false
+        if (pkg in OverlayManager.BLOCKED_PACKAGES) return false
+        return try {
+            isInstalledGame(context.packageManager.getApplicationInfo(pkg, 0))
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     fun scan(context: Context): GameScanResult {
         DataStore.init(context)
         val pm = context.packageManager

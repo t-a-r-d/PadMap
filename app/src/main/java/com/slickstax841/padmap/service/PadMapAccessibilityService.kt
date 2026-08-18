@@ -234,7 +234,7 @@ class PadMapAccessibilityService : AccessibilityService() {
                         }
                         updateInputInterception()
                     }
-                } else if (isGameOrUnknownApp(pkg)) {
+                } else if (com.slickstax841.padmap.data.GameScanner.isInstalledGame(this, pkg)) {
                     val current = DataStore.activeLayout
                     if (current != null && current.mappings.isNotEmpty()) {
                         if (current.packageName.isBlank()) {
@@ -288,17 +288,6 @@ class PadMapAccessibilityService : AccessibilityService() {
             }
         }
         if (changed) serviceInfo = info
-    }
-
-    private fun isGameOrUnknownApp(pkg: String): Boolean {
-        return try {
-            val info = packageManager.getApplicationInfo(pkg, 0)
-            if (info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0) return false
-            if (info.category == android.content.pm.ApplicationInfo.CATEGORY_GAME) return true
-            @Suppress("DEPRECATION")
-            if (info.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME != 0) return true
-            info.category == android.content.pm.ApplicationInfo.CATEGORY_UNDEFINED
-        } catch (_: Exception) { false }
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
