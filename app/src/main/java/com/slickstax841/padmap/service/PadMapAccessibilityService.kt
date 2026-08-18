@@ -67,6 +67,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     private val axisValues = mutableMapOf<String, Pair<Float, Float>>()
     private val hatState = mutableMapOf<String, Boolean>()
     private val stickDeadTicks = mutableMapOf<String, Int>()
+    private var inFlightTaps = 0
     private val freePointerIds = ArrayDeque<Int>().apply { addAll(0..9) }
     val activeHoldCount: Int get() = activeHolds.size
     val activeStickCount: Int get() = activeSticks.size
@@ -190,7 +191,14 @@ class PadMapAccessibilityService : AccessibilityService() {
         stickDeadTicks.clear()
         hatState.clear()
         SidecarClient.releaseAll()
+        inFlightTaps = 0
+        OverlayManager.instance?.setIconPassThrough(false)
         PlaybackDebug.log("playback released")
+    }
+
+    private fun syncIconPassThrough() {
+        val busy = activeHolds.isNotEmpty() || activeSticks.isNotEmpty() || inFlightTaps > 0
+        OverlayManager.instance?.setIconPassThrough(busy)
     }
 
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
@@ -516,6 +524,7 @@ class PadMapAccessibilityService : AccessibilityService() {
             pids.add(pid)
         }
         activeHolds[label] = HoldState(entries, pids)
+        syncIconPassThrough()
         entries.forEachIndexed { i, entry ->
             val (x, y) = tapXY(entry)
             val ok = SidecarClient.pointerDown(pids[i], x, y)
@@ -529,6 +538,7 @@ class PadMapAccessibilityService : AccessibilityService() {
             SidecarClient.pointerUp(pid)
             freePointer(pid)
         }
+        syncIconPassThrough()
     }
 
     private fun fireTaps(entries: List<MappingEntry>) {
@@ -540,6 +550,8 @@ class PadMapAccessibilityService : AccessibilityService() {
                 PlaybackDebug.log("tap ${entry.inputName} no pid")
                 return@forEach
             }
+            inFlightTaps++
+            syncIconPassThrough()
             scope.launch {
                 try {
                     mainHandler.post { SidecarClient.pointerDown(pid, x, y) }
@@ -547,9 +559,15 @@ class PadMapAccessibilityService : AccessibilityService() {
                     mainHandler.post {
                         SidecarClient.pointerUp(pid)
                         freePointer(pid)
+                        inFlightTaps = (inFlightTaps - 1).coerceAtLeast(0)
+                        syncIconPassThrough()
                     }
                 } catch (_: Throwable) {
                     freePointer(pid)
+                    mainHandler.post {
+                        inFlightTaps = (inFlightTaps - 1).coerceAtLeast(0)
+                        syncIconPassThrough()
+                    }
                 }
             }
         }
@@ -563,6 +581,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         }
         activeSticks[label] = StickState(drag, drag.centerX, drag.centerY, drag.lookMode, pid)
         stickDeadTicks[label] = 0
+        syncIconPassThrough()
         val ok = SidecarClient.pointerDown(pid, drag.centerX, drag.centerY)
         PlaybackDebug.log("stick $label down pid=$pid ${drag.centerX.toInt()},${drag.centerY.toInt()} ok=$ok ${SidecarClient.lastError}")
         ensureStickLoop()
@@ -623,6 +642,7 @@ class PadMapAccessibilityService : AccessibilityService() {
             freePointer(state.pointerId)
             PlaybackDebug.log("stick $label up")
         }
+        if (toRelease.isNotEmpty()) syncIconPassThrough()
         if (updates.isNotEmpty()) {
             val ok = SidecarClient.batchUpdate(updates)
             val first = updates.entries.first()

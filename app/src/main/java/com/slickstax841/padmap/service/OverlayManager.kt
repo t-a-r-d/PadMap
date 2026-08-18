@@ -175,6 +175,21 @@ class OverlayManager(private val context: Context) {
         handler.post { pinIconTopCenter(apply = true) }
     }
 
+    // Injected touches hit this window if it is touchable and overlaps a zone (BUG-009).
+    fun setIconPassThrough(passThrough: Boolean) {
+        val apply = Runnable {
+            val view = iconView ?: return@Runnable
+            val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                if (passThrough) WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                else WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            if (iconParams.flags == flags) return@Runnable
+            iconParams.flags = flags
+            runCatching { wm.updateViewLayout(view, iconParams) }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) apply.run()
+        else handler.post(apply)
+    }
+
     // Icon is a separate window. Never use overlay W/H/X/Y or a stale landscape width.
     // Do not add the status-bar inset: this window is already laid out below the bar,
     // so adding it again sits the icon too low on splash (BUG-008).

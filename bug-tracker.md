@@ -160,6 +160,27 @@ A11y already delivers pad keys/motion (v67). The catcher is not needed to play.
 
 ---
 
+## BUG-009 — Zone under the menu icon does not fire until the icon is moved
+
+**Status:** in progress
+**Reported:** 2026-08-18 on PadMap v68
+
+If the floating menu button sits on top of a mapped zone, pressing that pad button does nothing until the icon is dragged off the zone.
+
+### Cause
+
+The icon is a touchable `TYPE_ACCESSIBILITY_OVERLAY`. Injected downs/moves at that coordinate hit the icon window, not the game.
+
+### Attempts
+
+- [in progress] While any hold/stick/tap is active, set `FLAG_NOT_TOUCHABLE` on the icon so injects pass through to the game. Restore tappable flags when playback is idle.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-007 — Auto layouts and menu button appear on non-games
 
 **Status:** in progress
