@@ -1627,7 +1627,7 @@ class OverlayManager(private val context: Context) {
                         when {
                             dOuter < dp(22) -> DragMode.RESIZE
                             dDead  < dp(20) -> DragMode.DEADZONE
-                            dist < zone.innerRadius + dp(20) -> DragMode.MOVE
+                            dist <= zone.outerRadius + dp(8) -> DragMode.MOVE
                             else -> return false
                         }
                     } else {
@@ -1654,11 +1654,13 @@ class OverlayManager(private val context: Context) {
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
+                    val dragged = menuHidden
                     if (menuHidden) {
                         contextMenuViews.forEach { it.visibility = View.VISIBLE }
                         menuHidden = false
                     }
-                    if (dragMode == DragMode.MOVE && zone.inputName.isNotBlank()) onTap(zone)
+                    if (dragMode == DragMode.MOVE && zone.inputName.isNotBlank() && !dragged)
+                        onTap(zone)
                     dragMode = DragMode.NONE
                     return true
                 }

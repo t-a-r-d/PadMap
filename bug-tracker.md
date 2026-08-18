@@ -160,6 +160,27 @@ A11y already delivers pad keys/motion (v67). The catcher is not needed to play.
 
 ---
 
+## BUG-012 — Stick zone options only open from the inner circle
+
+**Status:** in progress
+**Reported:** 2026-08-18
+
+Tapping a stick zone should open its options from the centre and from the ring between the blue dead-zone and the orange outer limit. Only the small inner disc did.
+
+### Cause
+
+`ZoneCircleView` treats MOVE (which opens the menu on up) only when `dist < innerRadius + 20`. The rest of the disc out to `outerRadius` returns false, so the tap never opens options.
+
+### Attempts
+
+- [in progress] Assigned sticks: tap anywhere inside the orange ring (except the resize/dead-zone dots) is MOVE and opens options. Drag still moves the zone.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-011 — Look-stick pan is jittery; SPD shown as px; no invert-Y
 
 **Status:** in progress
