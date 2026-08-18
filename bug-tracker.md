@@ -7,7 +7,7 @@ CC reads this before investigating any bug.
 
 ## BUG-001 — Wireless debugging “connected” toast loops (Oppo A40)
 
-**Status:** v55 on device (toast loop / error text). Sidecar still not up — see BUG-002.
+**Status:** v56 on device. Toast-loop text not reported this time. Sidecar still not up.
 **Reported:** 2026-08-18 on Oppo A40 / ColorOS, PadMap v54
 
 After pairing, PadMap reaches wireless ADB, then Android’s “Wireless debugging connected” toast keeps sliding down. Looks like connect → drop → connect.
@@ -20,16 +20,17 @@ Home `ON_RESUME` calls `SidecarHost.ensureRunning`. `connect()` shows ColorOS’
 
 - [in progress] One auto-connect per process from Home resume. Overlapping `ensureRunning` returns immediately. Drop ADB after the sidecar pings (sidecar is localhost; holding wireless ADB retriggers ColorOS). Settings **START** still force-retries. Not on an APK until Damien says to build.
 - [in progress] 2026-08-18 Home showed `Sidecar did not start ECONNREFUSED` then the text vanished. Same loop: next resume overwrites `SidecarHost.status`. Also the start command is `sh -c 'app_process &'` over an ADB shell stream — closing that stream SIGHUPs the child, so nothing is left on port 18741. Next APK: `setsid`/`nohup` so the sidecar survives ADB disconnect, poll ping, keep the failure on the Home card.
+- [failed] v56 on A40: copy succeeded, then `Sidecar did not start` / connect to 18741 from 40744 refused / never stayed up. Empty sidecar log. `setsid`/`nohup` one-liners did not leave a process. 40744 is PadMap’s ephemeral source port, not ADB. Next: `--nice-name` after the directory makes `app_process` treat it as the class; `nohup CLASSPATH=...` treats the env assign as the executable. Start via a script (`--nice-name` before the dir), keep launch output, dump jar/ps/log on failure.
 
 ### Not tried
 
-- Confirm toast loop is gone on a later APK after BUG-002.
+- Device confirmation that the toast loop is gone on v56+ (not reported on this v56 try).
 
 ---
 
 ## BUG-002 — Injector jar copy truncated on Oppo A40 (v55)
 
-**Status:** fix written, not on device yet
+**Status:** v56 copy reached start (size check passed). Sidecar still died — BUG-001.
 **Reported:** 2026-08-18 on Oppo A40, PadMap v55
 
 Home: `Injector copy failed (phone has 6656 bytes, expected 6861)`.
@@ -41,10 +42,7 @@ Home: `Injector copy failed (phone has 6656 bytes, expected 6861)`.
 ### Attempts
 
 - [in progress] Push with `dd bs=<exact size> count=1` so it stops after the full jar. If the size still mismatches, write base64 over the shell and `base64 -d` on the phone. Not on an APK until Damien says to build.
-
-### Not tried
-
-- Device confirmation on A40 after the next APK.
+- [ok] v56 on A40: no “phone has 6656 bytes” — start reached the sidecar listen step. Copy fix held. Remaining failure is BUG-001.
 
 ---
 

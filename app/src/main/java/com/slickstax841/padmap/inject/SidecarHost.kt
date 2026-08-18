@@ -32,6 +32,7 @@ object SidecarHost {
     @Volatile private var inProgress = false
     @Volatile private var lastAttemptMs = 0L
     @Volatile private var autoTriedThisProcess = false
+    @Volatile private var lastLaunchNotes: String = ""
 
     fun isWirelessDebugOn(context: Context): Boolean {
         val cr = context.contentResolver
@@ -205,11 +206,9 @@ object SidecarHost {
         shell(mgr, "chmod 644 $remote")
         shell(mgr, "kill \$(cat $REMOTE_PID) 2>/dev/null; true")
         status = "Starting injector…"
-        launchDetached(mgr, remote)
+        launchDetached(mgr)
         if (!waitForPing(4000)) {
-            val log = runCatching { shell(mgr, "cat $REMOTE_LOG") }.getOrDefault("").trim()
-            val detail = log.ifBlank { "no sidecar log — process never stayed up" }
-            throw IllegalStateException("Sidecar did not start. ${SidecarClient.lastError}. $detail")
+            throw IllegalStateException(diagnose(mgr))
         }
         status = "Injector running"
         dropAdb(context)
@@ -267,9 +266,7 @@ object SidecarHost {
                 }
             }
         }
-        val log = execSu(su, null, "cat $REMOTE_LOG", 2_000).second.trim()
-        val detail = log.ifBlank { "no sidecar log — process never stayed up" }
-        throw IllegalStateException("Sidecar did not start as shell. ${SidecarClient.lastError}. $detail")
+        throw IllegalStateException(diagnoseRoot(su))
     }
 
     private fun startScript(token: String): String {
@@ -278,7 +275,8 @@ object SidecarHost {
             BIN=/system/bin/app_process64
             if [ ! -x ${'$'}BIN ]; then BIN=/system/bin/app_process; fi
             if [ ! -x ${'$'}BIN ]; then BIN=app_process64; fi
-            CLASSPATH=$REMOTE_JAR exec ${'$'}BIN /data/local/tmp --nice-name=padmap_sidecar com.slickstax841.padmap.sidecar.SidecarMain ${SidecarClient.PORT} $token
+            export CLASSPATH=$REMOTE_JAR
+            exec ${'$'}BIN --nice-name=padmap_sidecar /data/local/tmp com.slickstax841.padmap.sidecar.SidecarMain ${SidecarClient.PORT} $token
         """.trimIndent() + "\n"
     }
 
@@ -320,22 +318,83 @@ object SidecarHost {
     }
 
     /** New session so closing the ADB stream does not SIGHUP the injector. */
-    private fun launchDetached(mgr: PadMapAdbManager, remote: String) {
-        val cls = "com.slickstax841.padmap.sidecar.SidecarMain"
-        val args = "$cls ${SidecarClient.PORT} ${SidecarClient.authToken}"
-        val log = REMOTE_LOG
-        val run = { bin: String ->
-            "CLASSPATH=$remote $bin /data/local/tmp --nice-name=padmap_sidecar $args"
-        }
+    private fun launchDetached(mgr: PadMapAdbManager) {
+        lastLaunchNotes = ""
+        pushText(mgr, startScript(SidecarClient.authToken), REMOTE_SH)
+        shell(mgr, "chmod 755 $REMOTE_SH")
         val cmds = listOf(
-            "setsid -f sh -c '${run("app_process64")} </dev/null >$log 2>&1'",
-            "nohup ${run("app_process64")} </dev/null >$log 2>&1 &",
-            "setsid -f sh -c '${run("app_process")} </dev/null >$log 2>&1'",
-            "nohup ${run("app_process")} </dev/null >$log 2>&1 &"
+            "nohup $REMOTE_SH </dev/null >$REMOTE_LOG 2>&1 &",
+            "setsid -f $REMOTE_SH </dev/null >$REMOTE_LOG 2>&1",
+            "sh -c '$REMOTE_SH </dev/null >$REMOTE_LOG 2>&1 &'"
         )
+        val acc = StringBuilder()
         for (cmd in cmds) {
-            shell(mgr, cmd, timeoutMs = 600)
-            if (waitForPing(2000)) return
+            val out = shell(mgr, cmd, timeoutMs = 1500).trim()
+            acc.append(cmd).append(" -> ").append(out.ifBlank { "(no output)" }).append('\n')
+            lastLaunchNotes = acc.toString()
+            if (waitForPing(3000)) return
+        }
+    }
+
+    private fun pushText(mgr: PadMapAdbManager, text: String, remote: String) {
+        val b64 = Base64.encodeToString(text.toByteArray(Charset.forName("UTF-8")), Base64.NO_WRAP)
+        shell(mgr, "printf '%s' '$b64' | base64 -d > $remote")
+    }
+
+    private fun refusedExplain(): String {
+        val err = SidecarClient.lastError
+        val refused = err.contains("ECONNREFUSED", ignoreCase = true) ||
+            err.contains("refused", ignoreCase = true)
+        return if (refused) {
+            "Injector never listened on 127.0.0.1:${SidecarClient.PORT} (connection refused). " +
+                "Nothing is running there. The other port in the socket error is PadMap's outgoing port, not ADB."
+        } else if (err.isBlank()) {
+            "Injector did not answer on 127.0.0.1:${SidecarClient.PORT}."
+        } else {
+            "Injector did not answer on 127.0.0.1:${SidecarClient.PORT}: $err"
+        }
+    }
+
+    private fun diagnose(mgr: PadMapAdbManager): String {
+        val dump = shell(
+            mgr,
+            "echo JAR:\$(wc -c < $REMOTE_JAR 2>/dev/null); " +
+                "echo PIDFILE:\$(cat $REMOTE_PID 2>/dev/null); " +
+                "echo PS:\$(ps -A 2>/dev/null | grep -i padmap | grep -v grep); " +
+                "echo BIN64:\$(ls -l /system/bin/app_process64 2>&1); " +
+                "echo BIN:\$(ls -l /system/bin/app_process 2>&1); " +
+                "echo SCRIPT:\$(ls -l $REMOTE_SH 2>&1); " +
+                "echo LOGFILE:\$(ls -l $REMOTE_LOG 2>&1); " +
+                "echo LOG:; cat $REMOTE_LOG 2>/dev/null",
+            timeoutMs = 8000
+        ).trim()
+        return buildString {
+            append(refusedExplain())
+            if (lastLaunchNotes.isNotBlank()) {
+                append(" Launch: ").append(lastLaunchNotes.trim())
+            }
+            if (dump.isNotBlank()) {
+                append(" Phone: ").append(dump.replace('\n', ' | '))
+            }
+        }
+    }
+
+    private fun diagnoseRoot(su: String): String {
+        val dump = execSu(
+            su,
+            null,
+            "echo JAR:\$(wc -c < $REMOTE_JAR 2>/dev/null); " +
+                "echo PIDFILE:\$(cat $REMOTE_PID 2>/dev/null); " +
+                "echo PS:\$(ps -A 2>/dev/null | grep -i padmap | grep -v grep); " +
+                "echo BIN64:\$(ls -l /system/bin/app_process64 2>&1); " +
+                "echo LOG:; cat $REMOTE_LOG 2>/dev/null",
+            8_000
+        ).second.trim()
+        return buildString {
+            append(refusedExplain())
+            if (dump.isNotBlank()) {
+                append(" Phone: ").append(dump.replace('\n', ' | '))
+            }
         }
     }
 
