@@ -9,7 +9,6 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.*
 import android.widget.*
-import com.slickstax841.padmap.data.AndroidApiLevel
 import com.slickstax841.padmap.data.ButtonMode
 import com.slickstax841.padmap.data.ButtonTuningStore
 import com.slickstax841.padmap.data.DataStore
@@ -1067,6 +1066,17 @@ class OverlayManager(private val context: Context) {
                 dismissContextMenu()
                 rebuildZoneLayer()
             })
+            buttons.add(BtnSpec("\u2398", Color.parseColor("#336699")) {
+                val copy = zone.copy(
+                    id = UUID.randomUUID().toString(),
+                    cx = (zone.cx + dp(40)).coerceAtMost(dm.widthPixels - zone.innerRadius),
+                    cy = (zone.cy + dp(40)).coerceAtMost(dm.heightPixels - zone.innerRadius)
+                )
+                editingZones.add(copy)
+                dismissContextMenu()
+                rebuildZoneLayer()
+                showContextMenu(copy)
+            })
         }
 
         // LOOK / MOVE toggle — stick zones only, must be assigned
@@ -1619,48 +1629,6 @@ class OverlayManager(private val context: Context) {
         val tuning = ButtonTuningStore.get(tuneZoneId)
         val container = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
 
-        // Android API level row — GLOBAL setting, applies to all buttons
-        val apiRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(6) }
-        }
-        apiRow.addView(TextView(context).apply {
-            text = "ANDROID"
-            textSize = 10f
-            setTextColor(Color.parseColor("#AAAAAA"))
-            layoutParams = LinearLayout.LayoutParams(dp(56), LinearLayout.LayoutParams.WRAP_CONTENT)
-        })
-        AndroidApiLevel.values().forEach { level ->
-            val active = ButtonTuningStore.get(tuneZoneId).androidApiLevel == level
-            apiRow.addView(TextView(context).apply {
-                text = level.label
-                textSize = 10f
-                setPadding(dp(7), dp(4), dp(7), dp(4))
-                setTextColor(if (active) Color.BLACK else Color.parseColor("#00BFFF"))
-                background = if (active) GradientDrawable().apply {
-                    setColor(Color.parseColor("#00BFFF"))
-                    cornerRadius = dp(4).toFloat()
-                } else GradientDrawable().apply {
-                    setColor(Color.TRANSPARENT)
-                    setStroke(dp(1), Color.parseColor("#00BFFF"))
-                    cornerRadius = dp(4).toFloat()
-                }
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { marginEnd = dp(4) }
-                setOnClickListener {
-                    ButtonTuningStore.get(tuneZoneId).androidApiLevel = level
-                    refreshTuningContent()
-                }
-            })
-        }
-        container.addView(apiRow)
-
         // Mode row
         val modeRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1703,19 +1671,6 @@ class OverlayManager(private val context: Context) {
         }
         container.addView(modeRow)
 
-        // Size and duration (all modes)
-        container.addView(stepperRow(
-            label = "SIZE",
-            getValue = { "${ButtonTuningStore.get(tuneZoneId).tapSizePx.toInt()}px" },
-            minus = { amount ->
-                ButtonTuningStore.get(tuneZoneId).tapSizePx =
-                    (ButtonTuningStore.get(tuneZoneId).tapSizePx - 1f * amount).coerceAtLeast(0f)
-            },
-            plus = { amount ->
-                ButtonTuningStore.get(tuneZoneId).tapSizePx =
-                    (ButtonTuningStore.get(tuneZoneId).tapSizePx + 1f * amount).coerceAtMost(100f)
-            }
-        ))
         container.addView(stepperRow(
             label = "DURATION",
             getValue = { fmtMs(ButtonTuningStore.get(tuneZoneId).tapDurationMs) },
@@ -1741,22 +1696,6 @@ class OverlayManager(private val context: Context) {
                 plus = { amount ->
                     ButtonTuningStore.get(tuneZoneId).repeatIntervalMs =
                         (ButtonTuningStore.get(tuneZoneId).repeatIntervalMs + 25L * amount).coerceAtMost(100_000L)
-                }
-            ))
-        }
-
-        // Release duration (HOLD only)
-        if (tuning.mode == ButtonMode.HOLD) {
-            container.addView(stepperRow(
-                label = "RELEASE",
-                getValue = { fmtMs(ButtonTuningStore.get(tuneZoneId).holdReleaseDurationMs) },
-                minus = { amount ->
-                    ButtonTuningStore.get(tuneZoneId).holdReleaseDurationMs =
-                        (ButtonTuningStore.get(tuneZoneId).holdReleaseDurationMs - 10L * amount).coerceAtLeast(0L)
-                },
-                plus = { amount ->
-                    ButtonTuningStore.get(tuneZoneId).holdReleaseDurationMs =
-                        (ButtonTuningStore.get(tuneZoneId).holdReleaseDurationMs + 10L * amount).coerceAtMost(100_000L)
                 }
             ))
         }
@@ -1943,63 +1882,19 @@ class OverlayManager(private val context: Context) {
         val tuning = ButtonTuningStore.getStick(stickTuneZoneId)
         val container = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
 
-        // Android version — per-stick, changeable here
-        val apiRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(6) }
-        }
-        apiRow.addView(TextView(context).apply {
-            text = "ANDROID"
-            textSize = 10f
-            setTextColor(Color.parseColor("#AAAAAA"))
-            layoutParams = LinearLayout.LayoutParams(dp(56), LinearLayout.LayoutParams.WRAP_CONTENT)
-        })
-        AndroidApiLevel.values().forEach { level ->
-            val active = ButtonTuningStore.getStick(stickTuneZoneId).androidApiLevel == level
-            apiRow.addView(TextView(context).apply {
-                text = level.label
-                textSize = 10f
-                setPadding(dp(7), dp(4), dp(7), dp(4))
-                setTextColor(if (active) Color.BLACK else Color.parseColor("#BB88FF"))
-                background = if (active) GradientDrawable().apply {
-                    setColor(Color.parseColor("#BB88FF"))
-                    cornerRadius = dp(4).toFloat()
-                } else GradientDrawable().apply {
-                    setColor(Color.TRANSPARENT)
-                    setStroke(dp(1), Color.parseColor("#BB88FF"))
-                    cornerRadius = dp(4).toFloat()
-                }
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { marginEnd = dp(4) }
-                setOnClickListener {
-                    ButtonTuningStore.getStick(stickTuneZoneId).androidApiLevel = level
-                    refreshTuningContent()
-                }
-            })
-        }
-        container.addView(apiRow)
-
-        // SPEED — gesture segment duration in ms (10 ms – 100 s)
         container.addView(stepperRow(
-            label = "SPEED",
-            getValue = { fmtMs(ButtonTuningStore.getStick(stickTuneZoneId).speedMs) },
+            label = "LOOK SPD",
+            getValue = { "${ButtonTuningStore.getStick(stickTuneZoneId).lookSpeedPx.toInt()}px" },
             minus = { amount ->
-                ButtonTuningStore.getStick(stickTuneZoneId).speedMs =
-                    (ButtonTuningStore.getStick(stickTuneZoneId).speedMs - 10L * amount).coerceAtLeast(10L)
+                ButtonTuningStore.getStick(stickTuneZoneId).lookSpeedPx =
+                    (ButtonTuningStore.getStick(stickTuneZoneId).lookSpeedPx - amount).coerceAtLeast(1f)
             },
             plus = { amount ->
-                ButtonTuningStore.getStick(stickTuneZoneId).speedMs =
-                    (ButtonTuningStore.getStick(stickTuneZoneId).speedMs + 10L * amount).coerceAtMost(100_000L)
+                ButtonTuningStore.getStick(stickTuneZoneId).lookSpeedPx =
+                    (ButtonTuningStore.getStick(stickTuneZoneId).lookSpeedPx + amount).coerceAtMost(40f)
             }
         ))
 
-        // SENSITIVITY — sweep distance scale (10% – 300%)
         container.addView(stepperRow(
             label = "SENS",
             getValue = { "${(ButtonTuningStore.getStick(stickTuneZoneId).sensitivityPct * 100).toInt()}%" },
@@ -2012,44 +1907,6 @@ class OverlayManager(private val context: Context) {
                 val cur = ButtonTuningStore.getStick(stickTuneZoneId).sensitivityPct
                 ButtonTuningStore.getStick(stickTuneZoneId).sensitivityPct =
                     (Math.round((cur + 0.1f * amount) * 10) / 10f).coerceAtMost(3.0f)
-            }
-        ))
-
-        // LATCH — ms below dead zone before chain releases (absorbs stick wobble)
-        container.addView(stepperRow(
-            label = "LATCH",
-            getValue = {
-                val v = ButtonTuningStore.getStick(stickTuneZoneId).latchMs
-                if (v == 0L) "OFF" else fmtMs(v)
-            },
-            minus = { amount ->
-                val cur = ButtonTuningStore.getStick(stickTuneZoneId).latchMs
-                ButtonTuningStore.getStick(stickTuneZoneId).latchMs =
-                    (cur - 10L * amount).coerceAtLeast(0L)
-            },
-            plus = { amount ->
-                val cur = ButtonTuningStore.getStick(stickTuneZoneId).latchMs
-                ButtonTuningStore.getStick(stickTuneZoneId).latchMs =
-                    (cur + 10L * amount).coerceAtMost(2000L)
-            }
-        ))
-
-        // COAST — ms to continue in last direction after confirmed release
-        container.addView(stepperRow(
-            label = "COAST",
-            getValue = {
-                val v = ButtonTuningStore.getStick(stickTuneZoneId).coastMs
-                if (v == 0L) "OFF" else fmtMs(v)
-            },
-            minus = { amount ->
-                val cur = ButtonTuningStore.getStick(stickTuneZoneId).coastMs
-                ButtonTuningStore.getStick(stickTuneZoneId).coastMs =
-                    (cur - 10L * amount).coerceAtLeast(0L)
-            },
-            plus = { amount ->
-                val cur = ButtonTuningStore.getStick(stickTuneZoneId).coastMs
-                ButtonTuningStore.getStick(stickTuneZoneId).coastMs =
-                    (cur + 10L * amount).coerceAtMost(2000L)
             }
         ))
 

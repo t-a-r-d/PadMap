@@ -20,6 +20,11 @@ AccessibilityService and `TYPE_APPLICATION_OVERLAY`.
 
 A filter that works for buttons can silently break axes. Enumerate both paths before changing routing.
 
+Playback is a shell sidecar (`sidecar/SidecarMain.java`) started after in-app wireless
+ADB pairing. The app never calls `injectInputEvent`. Overlay is placement only.
+Move stick is absolute (`centre + axis * radius`). Look stick is relative
+(`+= axis * speed`, reset at edge). Buttons are pointer down/up on that sidecar.
+
 ## Extra pre-build ask
 
 Before a version bump, also ask:

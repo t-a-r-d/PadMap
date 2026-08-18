@@ -1,11 +1,16 @@
 package com.slickstax841.padmap.ui
 
+import android.content.Intent
+import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
@@ -14,12 +19,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.slickstax841.padmap.data.DataStore
-import com.slickstax841.padmap.service.InjectManager
+import com.slickstax841.padmap.inject.NsdAdbFinder
+import com.slickstax841.padmap.inject.SidecarClient
+import com.slickstax841.padmap.inject.SidecarHost
 import com.slickstax841.padmap.ui.theme.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
@@ -37,7 +49,6 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
             Spacer(Modifier.height(24.dp))
 
-            // APPEARANCE
             Text("APPEARANCE", fontSize = 11.sp, color = skin.textSecondary, letterSpacing = 2.sp,
                 fontFamily = skin.labelFont)
             Spacer(Modifier.height(12.dp))
@@ -54,26 +65,28 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             Spacer(Modifier.height(32.dp))
 
-            // INPUT MODE
-            Text("INPUT MODE", fontSize = 11.sp, color = skin.textSecondary, letterSpacing = 2.sp,
+            Text("INJECTOR", fontSize = 11.sp, color = skin.textSecondary, letterSpacing = 2.sp,
                 fontFamily = skin.labelFont)
             Spacer(Modifier.height(12.dp))
-            InjectionStatusCard(skin = skin)
+            InjectorCard(skin = skin)
         }
     }
 }
 
 @Composable
-private fun InjectionStatusCard(skin: AppSkin) {
-    val available = InjectManager.isAvailable
-    val dotColor  = if (available) Color(0xFF00DD66) else Color(0xFFFF8800)
-    val statusText = if (available) "Enhanced injection active" else "Standard injection active"
-    val detail = if (available)
-        "injectInputEvent() \u2014 TOOL_TYPE_FINGER, true multi-touch, 16ms timer loop"
-    else
-        "dispatchGesture() fallback \u2014 some anti-cheat games may not respond"
+private fun InjectorCard(skin: AppSkin) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var code by remember { mutableStateOf("") }
+    var pairPort by remember { mutableStateOf("") }
+    var connectPort by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var running by remember { mutableStateOf(SidecarClient.isAvailable) }
 
-    Box(
+    val dotColor = if (running) Color(0xFF00DD66) else Color(0xFFFF8800)
+    val statusText = if (running) "Injector running" else SidecarHost.status
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
@@ -81,20 +94,91 @@ private fun InjectionStatusCard(skin: AppSkin) {
             .border(1.dp, skin.borderUnfocused, RoundedCornerShape(8.dp))
             .padding(14.dp)
     ) {
-        Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(RoundedCornerShape(5.dp))
-                        .background(dotColor)
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(statusText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                    color = skin.textPrimary, fontFamily = skin.labelFont)
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(detail, fontSize = 12.sp, color = skin.textSecondary, fontFamily = skin.labelFont)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(dotColor)
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(statusText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                color = skin.textPrimary, fontFamily = skin.labelFont)
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Enable Wireless debugging, open Pair with pairing code, then enter the 6-digit code. PadMap starts its own injector — no Shizuku.",
+            fontSize = 12.sp, color = skin.textSecondary, fontFamily = skin.labelFont
+        )
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = code,
+            onValueChange = { if (it.length <= 6) code = it.filter { ch -> ch.isDigit() } },
+            label = { Text("Pairing code") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = pairPort,
+                onValueChange = { pairPort = it.filter { ch -> ch.isDigit() } },
+                label = { Text("Pair port (auto if blank)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedTextField(
+                value = connectPort,
+                onValueChange = { connectPort = it.filter { ch -> ch.isDigit() } },
+                label = { Text("Connect port (auto)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = {
+                ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+            }) { Text("OPEN DEVELOPER", color = skin.accent, fontSize = 12.sp) }
+            TextButton(
+                enabled = !busy && code.length == 6,
+                onClick = {
+                    busy = true
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            runCatching {
+                                if (!SidecarHost.isWirelessDebugOn(ctx)) {
+                                    error("Turn on Wireless debugging first")
+                                }
+                                val pairEp = if (pairPort.isNotBlank()) {
+                                    com.slickstax841.padmap.inject.AdbEndpoint("127.0.0.1", pairPort.toInt())
+                                } else {
+                                    NsdAdbFinder.find(ctx, pairing = true)
+                                        ?: error("Could not find pairing port. Enter it from the pairing dialog.")
+                                }
+                                SidecarHost.pair(ctx, pairEp.host, pairEp.port, code)
+                                val connEp = if (connectPort.isNotBlank()) {
+                                    com.slickstax841.padmap.inject.AdbEndpoint("127.0.0.1", connectPort.toInt())
+                                } else {
+                                    NsdAdbFinder.find(ctx, pairing = false)
+                                        ?: error("Could not find wireless debugging port.")
+                                }
+                                SidecarHost.start(ctx, connEp.host, connEp.port)
+                            }
+                        }
+                        busy = false
+                        running = SidecarClient.isAvailable
+                        result.exceptionOrNull()?.let {
+                            Toast.makeText(ctx, it.message ?: "Pair failed", Toast.LENGTH_LONG).show()
+                        } ?: Toast.makeText(ctx, "Injector running", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            ) { Text(if (busy) "WORKING…" else "PAIR & START", color = skin.accent, fontSize = 12.sp) }
         }
     }
 }

@@ -43,6 +43,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.slickstax841.padmap.data.ControllerPreset
 import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.data.GameLayout
+import com.slickstax841.padmap.inject.SidecarClient
 import com.slickstax841.padmap.service.OverlayManager
 import com.slickstax841.padmap.service.PadMapAccessibilityService
 import com.slickstax841.padmap.ui.theme.*
@@ -56,6 +57,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
 
     var hasOverlay by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
     var hasA11y by remember { mutableStateOf(isA11yEnabled(ctx)) }
+    var hasInjector by remember { mutableStateOf(SidecarClient.isAvailable) }
     // Scan for a connected gamepad, build a preset from its reported capabilities, and save it.
     // Called on every resume so a newly connected controller is picked up automatically.
     fun scanAndSaveController() {
@@ -142,6 +144,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     Toast.makeText(ctx, "Accessibility service enabled", Toast.LENGTH_SHORT).show()
                 hasOverlay = newOverlay
                 hasA11y = newA11y
+                hasInjector = SidecarClient.ping()
                 OverlayManager.instance?.repositionForHome()
                 scanAndSaveController()
             }
@@ -192,6 +195,18 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                         Text("\u25CE  Show overlay config button", color = skin.accent, fontSize = 13.sp)
                     }
                     Spacer(Modifier.height(4.dp))
+                }
+            }
+
+            if (hasOverlay && hasA11y && !hasInjector) {
+                item {
+                    SectionLabel("INJECTOR")
+                    Spacer(Modifier.height(6.dp))
+                    PermCard(
+                        label = "Wireless debugging injector",
+                        instructions = "Settings \u2192 pair a 6-digit wireless debugging code. PadMap starts its own injector. Overlay mapping will not reach games until this is running."
+                    ) { onSettings() }
+                    Spacer(Modifier.height(8.dp))
                 }
             }
 

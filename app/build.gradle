@@ -51,7 +51,42 @@ dependencies {
     implementation 'androidx.navigation:navigation-compose:2.7.7'
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0'
-    // HiddenApiBypass — allows injectInputEvent() reflection without a privileged app
-    implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:4.3'
+    implementation 'com.github.MuntashirAkon:libadb-android:3.1.1'
+    implementation 'com.github.MuntashirAkon:sun-security-android:1.1'
+    implementation 'org.conscrypt:conscrypt-android:2.5.3'
     debugImplementation 'androidx.compose.ui:ui-tooling'
+}
+
+def sidecarSrc = file("${rootDir}/sidecar/src")
+def sidecarClasses = file("${buildDir}/sidecar/classes")
+def sidecarJar = file("${projectDir}/src/main/assets/sidecar/padmap-sidecar.jar")
+def androidJar = file("${android.sdkDirectory}/platforms/android-${android.compileSdk}/android.jar")
+def d8 = file("${android.sdkDirectory}/build-tools/35.0.0/d8")
+
+tasks.register('compileSidecar', JavaCompile) {
+    source = fileTree(sidecarSrc)
+    include '**/*.java'
+    classpath = files(androidJar)
+    destinationDirectory = sidecarClasses
+    sourceCompatibility = '17'
+    targetCompatibility = '17'
+    options.bootstrapClasspath = files(androidJar)
+}
+
+tasks.register('packageSidecar') {
+    dependsOn compileSidecar
+    inputs.dir(sidecarClasses)
+    outputs.file(sidecarJar)
+    doLast {
+        sidecarJar.parentFile.mkdirs()
+        def classes = fileTree(sidecarClasses).include('**/*.class').files
+        if (classes.isEmpty()) throw new GradleException("sidecar compile produced no classes")
+        exec {
+            commandLine([d8.absolutePath, '--min-api', '26', '--output', sidecarJar.absolutePath] + classes.collect { it.absolutePath })
+        }
+    }
+}
+
+afterEvaluate {
+    tasks.named('preBuild').configure { dependsOn 'packageSidecar' }
 }

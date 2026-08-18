@@ -10,4 +10,5 @@ app/build/
 .cxx/
 .DS_Store
 captures/
+app/src/main/assets/sidecar/
 *.hprof
