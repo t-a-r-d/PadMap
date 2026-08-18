@@ -279,17 +279,11 @@ object SidecarHost {
         }
         execSu(su, null, "kill \$(cat $REMOTE_PID) 2>/dev/null; true", 3_000)
         status = "Starting injector…"
-        val launchCmds = listOf(
-            "setsid -f $REMOTE_SH </dev/null >$REMOTE_LOG 2>&1",
-            "nohup $REMOTE_SH </dev/null >$REMOTE_LOG 2>&1 &"
-        )
         for (uid in listOf("2000", "shell")) {
-            for (cmd in launchCmds) {
-                execSu(su, uid, cmd, 2_000)
-                if (waitForPing(2_500)) {
-                    status = "Injector running"
-                    return true
-                }
+            execSu(su, uid, REMOTE_SH, 2_000)
+            if (waitForPing(2_500)) {
+                status = "Injector running"
+                return true
             }
         }
         val detail = diagnoseRoot(su)
@@ -306,6 +300,18 @@ object SidecarHost {
             export CLASSPATH=$REMOTE_JAR
             BIN=/system/bin/app_process64
             if [ ! -x ${'$'}BIN ]; then BIN=/system/bin/app_process; fi
+            LOG=$REMOTE_LOG
+            if [ "${'$'}1" != "--fg" ]; then
+              trap '' HUP
+              if command -v setsid >/dev/null 2>&1; then
+                setsid ${'$'}0 --fg </dev/null >>${'$'}LOG 2>&1 &
+              else
+                ${'$'}0 --fg </dev/null >>${'$'}LOG 2>&1 &
+              fi
+              echo DAEMON:${'$'}!
+              exit 0
+            fi
+            echo padmap-start: exec ${'$'}BIN
             exec ${'$'}BIN -Djava.class.path=$REMOTE_JAR /data/local/tmp com.slickstax841.padmap.sidecar.SidecarMain ${SidecarClient.PORT} $token
         """.trimIndent() + "\n"
     }
@@ -365,11 +371,8 @@ object SidecarHost {
         if (probeLog.isNotBlank()) acc.append(" | ").append(probeLog)
         acc.append('\n')
         lastLaunchNotes = acc.toString()
-        val detach = shell(
-            mgr,
-            "nohup $REMOTE_SH </dev/null >$REMOTE_LOG 2>&1 & echo FORK:${'$'}!",
-            timeoutMs = 2000
-        ).trim()
+        shell(mgr, "rm -f $REMOTE_LOG $REMOTE_PID")
+        val detach = shell(mgr, REMOTE_SH, timeoutMs = 3000).trim()
         acc.append("DETACH: ").append(detach.ifBlank { "(no output)" })
         lastLaunchNotes = acc.toString()
         waitForPing(4000)
