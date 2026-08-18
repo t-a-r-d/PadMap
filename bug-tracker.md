@@ -91,10 +91,11 @@ v65 overlay DEBUG on Shadowborn (`com.onemb.shadowborn`): play catcher focused, 
 - [in progress] v65 dump confirmed NOTME on ping. Move all `SidecarClient` socket I/O onto a dedicated thread so playback ping/inject from the main thread no longer throw.
 - [ok] v66 Shadowborn: `ping=true` `down ok=true`. Inject reaches the game. Stick only nudged; four buttons at once kept tapping one button.
 - [in progress] v66 dump: same pointer ids reused (`B`/`X`/`Y`/`stick` on pid=0/2), no `btn up`, play catcher torn down mid-game (`play catcher focused=true` twice). `TYPE_WINDOWS_CHANGED` treats a focused System UI window as leaving the game and destroys the catcher — key-ups never arrive, HOLD/REPEAT never stop, stick is released. Extra DOWNs then recycle the same pointer. Next: ignore System UI flashes, do not reuse an in-use pointer id, ignore a second DOWN while that button is already held, keep the stick down across a short dead-zone blip.
+- [ok] v67: buttons and move-stick work. Look stick not tried. First-screen hang + low icon is BUG-008.
 
 ### Not tried
 
-- Device confirmation after the next APK.
+- Look-stick confirmation.
 
 ---
 
@@ -125,6 +126,29 @@ EXIT on Home calls `disableAndStop()` then `finishAndRemoveTask()`. Swiping the 
 ### Attempts
 
 - [in progress] `onTaskRemoved` and `onDestroy` (when finishing) call the same `disableAndStop()` as EXIT.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
+## BUG-008 — Game first screen hangs; menu icon too low until minimise
+
+**Status:** in progress
+**Reported:** 2026-08-18 on Oppo A40, PadMap v67
+
+Buttons and move-stick work. On game start the first screen hangs and the menu icon sits slightly lower than usual. Minimise + reopen puts the icon back and some games then load (some never do).
+
+### Cause
+
+`showPlayCatcher()` adds a focusable `TYPE_ACCESSIBILITY_OVERLAY` and `requestFocus()`. The game never gets window focus, so splash/first activity waits. Status bar stays up; `pinIconTopCenter` then adds the status-bar inset on top of an overlay that is already laid out below the bar, so the icon sits too low. After recents, the game is focused/immersive, inset is 0, icon is correct.
+
+A11y already delivers pad keys/motion (v67). The catcher is not needed to play.
+
+### Attempts
+
+- [in progress] Do not add the focusable play catcher. Pin the icon at `y=4dp` with no extra status-bar inset, and re-pin after the game has a moment to go immersive.
 
 ### Not tried
 

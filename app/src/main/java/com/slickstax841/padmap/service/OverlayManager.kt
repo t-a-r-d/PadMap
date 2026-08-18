@@ -176,19 +176,20 @@ class OverlayManager(private val context: Context) {
     }
 
     // Icon is a separate window. Never use overlay W/H/X/Y or a stale landscape width.
+    // Do not add the status-bar inset: this window is already laid out below the bar,
+    // so adding it again sits the icon too low on splash (BUG-008).
     private fun pinIconTopCenter(apply: Boolean) {
-        val topInset = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            wm.currentWindowMetrics.windowInsets
-                .getInsets(android.view.WindowInsets.Type.statusBars()).top
-        } else {
-            val id = context.resources.getIdentifier("status_bar_height", "dimen", "android")
-            if (id > 0) context.resources.getDimensionPixelSize(id) else dp(24)
-        }
         iconParams.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
         iconParams.x = 0
-        iconParams.y = topInset + dp(4)
+        iconParams.y = dp(4)
         if (apply) {
             iconView?.let { runCatching { wm.updateViewLayout(it, iconParams) } }
+        }
+    }
+
+    private val repinIcon = Runnable {
+        if (state == State.FLOATING && iconView?.visibility == View.VISIBLE) {
+            pinIconTopCenter(apply = true)
         }
     }
 
@@ -219,7 +220,9 @@ class OverlayManager(private val context: Context) {
             }
             view.visibility = View.VISIBLE
             pinIconTopCenter(apply = true)
-            showPlayCatcher()
+            handler.removeCallbacks(repinIcon)
+            handler.postDelayed(repinIcon, 400)
+            handler.postDelayed(repinIcon, 1200)
         }
     }
 
@@ -1352,23 +1355,8 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun showPlayCatcher() {
-        if (state == State.CONFIG) return
-        playCatcher?.let {
-            it.post { it.requestFocus() }
-            return
-        }
-        val v = PlaybackCatcherView(context)
-        playCatcher = v
-        try {
-            wm.addView(v, playParams)
-            v.post {
-                v.requestFocus()
-                PlaybackDebug.log("play catcher focused=${v.hasFocus()}")
-            }
-        } catch (e: Exception) {
-            playCatcher = null
-            PlaybackDebug.log("play catcher add failed ${e.message}")
-        }
+        // A11y already gets pad keys/motion. A focusable overlay steals the
+        // game's first window focus and hangs splash (BUG-008).
     }
 
     private fun hidePlayCatcher() {
