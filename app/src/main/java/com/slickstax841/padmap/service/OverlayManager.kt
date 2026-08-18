@@ -32,6 +32,13 @@ class OverlayManager(private val context: Context) {
             "com.google.android.gsf",
             "com.google.android.gms.ui"
         )
+        private val KNOWN_LAUNCHERS = setOf(
+            "com.oppo.launcher",
+            "com.heytap.launcher",
+            "com.oplus.launcher",
+            "com.android.launcher",
+            "com.android.launcher3"
+        )
     }
 
     enum class State { FLOATING, CONFIG }
@@ -126,6 +133,10 @@ class OverlayManager(private val context: Context) {
             iconView?.visibility = View.VISIBLE  // restore if hidden by isSystemUi
             showFloatingIcon()                    // create if it doesn't exist yet
         }
+    }
+
+    fun hideIconOnAppBackground() {
+        handler.post { iconView?.visibility = View.GONE }
     }
 
     // Move icon to title-row position (PadMap app is foreground)
@@ -272,6 +283,7 @@ class OverlayManager(private val context: Context) {
     // ─── Config mode ──────────────────────────────────────────────────────────
 
     private fun isSystemLauncher(pkg: String): Boolean {
+        if (pkg in KNOWN_LAUNCHERS) return true
         val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
             addCategory(android.content.Intent.CATEGORY_HOME)
         }

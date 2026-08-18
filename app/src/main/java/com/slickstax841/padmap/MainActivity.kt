@@ -14,6 +14,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.slickstax841.padmap.data.DataStore
+import com.slickstax841.padmap.service.OverlayManager
 import com.slickstax841.padmap.service.PadMapAccessibilityService
 import com.slickstax841.padmap.ui.ControllerMappingScreen
 import com.slickstax841.padmap.ui.GameLayoutScreen
@@ -63,6 +64,13 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         PadMapAccessibilityService.instance?.padMapUiVisible = false
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) {
+            OverlayManager.instance?.hideIconOnAppBackground()
+        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {

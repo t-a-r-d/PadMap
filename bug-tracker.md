@@ -46,6 +46,27 @@ Home: `Injector copy failed (phone has 6656 bytes, expected 6861)`.
 
 - Device confirmation on A40 after the next APK.
 
+---
+
+## BUG-003 — Overlay button stays on Android home after leaving PadMap
+
+**Status:** fix written, not on device yet
+**Reported:** 2026-08-18, PadMap v55 on Oppo A40
+
+Closing PadMap (Android Home / leaving the activity) leaves the floating config button on the launcher.
+
+### Cause
+
+Home `ON_RESUME` forces the icon visible. ColorOS often does not fire a launcher `WINDOW_STATE_CHANGED` after PadMap stops, so `repositionForGame()` never hides it.
+
+### Attempts
+
+- [in progress] Hide the floating icon in `MainActivity.onStop`. Game window events still show it in a game. Known ColorOS launcher packages treated as system UI. Not on an APK until Damien says to build.
+
+### Not tried
+
+- Device confirmation on A40 after the next APK.
+
 ## How to use this file
 
 When a bug is reported:
