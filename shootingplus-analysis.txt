@@ -1,0 +1,321 @@
+SHOOTINGPLUS V3 (controller_app.xapk) — STICK / BUTTON ANALYSIS
+================================================================
+Analysed: 2026-08-18
+Source: controller_app.xapk (ShootingPlus V3, com.qx.qgbox, v3.0.1.684 / 784)
+Decompiled with jadx 1.5.1. Competitive analysis only — no ShootingPlus code is copied.
+
+Purpose: Damien reported PadMap’s overlay tried two distinct ways to make
+sticks/buttons work and neither succeeded. This document records how
+ShootingPlus actually drives look sticks, move sticks, and buttons, and why
+PadMap’s two paths cannot match that even when the overlay UI looks similar.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 1 — WHAT THIS APK ACTUALLY IS
+═══════════════════════════════════════════════════════════════════════════════
+
+Package:  com.qx.qgbox
+Name:     ShootingPlus V3
+Role:     Companion app for QX / QGBox gamepad hardware, plus a software
+          injection sidecar for phones that have wireless ADB paired.
+
+The overlay is a mapping editor. It is not the thing that touches the game.
+
+There is no AccessibilityService in the manifest. No BIND_ACCESSIBILITY_SERVICE.
+No dispatchGesture() anywhere in the product code. Overlay windows are
+TYPE_APPLICATION_OVERLAY / TYPE_SYSTEM_ALERT for placing zones on top of a
+game, then they go away. Playback does not go through that overlay.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 2 — HOW TOUCHES ACTUALLY REACH THE GAME
+═══════════════════════════════════════════════════════════════════════════════
+
+They do not inject from the normal app process. They do not use HiddenApiBypass
+inside the APK. They launch a separate shell-uid process and inject from there.
+
+Start sequence (wireless ADB, same pairing stack as Shizuku):
+
+  1. Copy assets/server/{qxstart, QXToolMain.jar, libqxserver.so}
+     to /sdcard/qx/server, then to /data/local/tmp
+  2. chmod 777 /data/local/tmp/qxstart
+  3. Run /data/local/tmp/qxstart as adb shell
+  4. qxstart launches:
+       export CLASSPATH=/data/local/tmp/QXToolMain.jar
+       app_process32 /data/local/tmp com.qxtool.QXToolMain
+
+That process is uid shell. Shell is allowed to call InputManager.injectInputEvent.
+A normal app is not. HiddenApiBypass only skips hidden-API greylist checks. It
+does not grant INJECT_EVENTS. Reflection can resolve the method, invoke it, and
+the system still drops the event. That is why PadMap’s InjectManager can report
+“available” while games see nothing.
+
+Inside QXToolMain (the privileged process):
+
+  - Resolves InputManager.getInstance() / InputManagerGlobal.getInstance()
+  - Calls injectInputEvent(event, 0)   // 0 = ASYNC
+  - Pre-API-16 fallback: IWindowManager.injectPointerEvent
+  - Native libqxserver.so does keymappingInit(width, height)
+  - Native thread threadReadSocketFromApp receives live mapping / axis data
+  - Native thread thread_main_touch computes up to 9 touch slots
+  - Native calls back Java receiveTouchData(int[])
+  - Java InjectDown / InjectMove / InjectUp emit MotionEvents
+
+Hardware path (their own dongle): the same overlay mapping is packed into a
+binary key map and written to the box over Bluetooth. The box can then emit
+HID touches itself. That path is irrelevant to PadMap unless we ship hardware.
+
+Software path that PadMap can learn from: privileged process + injectInputEvent.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 3 — MOTIONEVENT SHAPE (BUTTONS AND STICKS SHARE THIS)
+═══════════════════════════════════════════════════════════════════════════════
+
+Up to 9 simultaneous pointers. Every event carries ALL currently-down pointers.
+
+  First finger down:      ACTION_DOWN
+  Extra finger down:      ACTION_POINTER_DOWN | (index << 8)
+  Any movement:           one ACTION_MOVE listing every live pointer
+  One finger up:          ACTION_POINTER_UP  | (index << 8)
+  Last finger up:         ACTION_UP
+
+Pointer properties:
+  toolType  = TOOL_TYPE_FINGER (1)
+  source    = SOURCE_TOUCHSCREEN (4098)
+  pressure  = 0
+  size      unused
+  deviceId  = 0
+
+This is real Android multi-touch. Games that call getPointerCount() and
+getToolType() see two thumbs plus a button as concurrent fingers.
+
+PadMap’s InjectManager already builds this shape. The events never land
+because they are sent from the wrong uid. dispatchGesture() cannot set
+TOOL_TYPE_FINGER at all (always TOOL_TYPE_UNKNOWN) and is limited to a
+small number of simultaneous strokes.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 4 — THE TWO STICK MODES (THIS IS WHAT THE OVERLAY TOGGLE MEANS)
+═══════════════════════════════════════════════════════════════════════════════
+
+UI labels (English resources):
+
+  “Ordinary stick”  = move / walk stick     (property 12, logged ABS_JOY)
+  “View stick”      = look / camera stick   (property 11, logged RELA_JOY)
+
+Left stick settings vs right stick settings are only titles. Either physical
+stick can be set to either mode. Defaults: both start as Ordinary (property 12).
+The user then flips the right-stick zone to View.
+
+These are not two skins of the same algorithm. The firmware / native mapper
+encodes them as different key types and runs different math.
+
+
+───────────────────────────────────────────────────────────────────────────────
+4A. ORDINARY STICK  =  ABSOLUTE POSITION  (move / walk)
+───────────────────────────────────────────────────────────────────────────────
+
+What the user tunes:
+  - Walking radius  (required, cannot be 0)
+  - Optional origin delay (“delayed release”)
+  - Optional radius-switch button (hold a key to shrink/grow radius —
+    walk vs sprint / stand still)
+
+What the mapper does every tick:
+
+  x = centerX + axisX * radius
+  y = centerY + axisY * radius
+
+  Finger goes DOWN at centre when the stick leaves the dead zone.
+  Finger stays DOWN and is moved to that absolute offset.
+  Finger is lifted only when the stick returns to centre (plus optional
+  origin delay).
+
+There is no sweep, no incremental step, no snap-back, no UP/DOWN reset
+while the stick is held. The on-screen virtual joystick in the game sees
+a thumb parked at a fixed offset, which is exactly how a human walks.
+
+Their own log tag for this path is ABS_JOY.
+
+
+───────────────────────────────────────────────────────────────────────────────
+4B. VIEW STICK  =  RELATIVE / VELOCITY  (look / camera)
+───────────────────────────────────────────────────────────────────────────────
+
+What the user tunes:
+  - Moving speed  (pixels per tick, default they seed at 5)
+  - Optional Slow Mode (hold an associated button to drop to a finer speed)
+  - Optional Sensor Mode (gyro assist) on newer map versions
+  - No radius. Radius control is disabled in this mode.
+
+What the mapper does every tick:
+
+  x += axisX * speed
+  y += axisY * speed
+
+  Finger goes DOWN at the zone centre, then is dragged by a delta each tick.
+  When the pointer would leave the useful look area, it is lifted and put
+  back down near the centre, then the drag continues. That is the same
+  “slide to the edge, lift, return to start, slide again” pattern their
+  mouse-look help text describes.
+
+Games that treat a drag as camera delta (PUBG / COD look area) see a
+continuous swipe. A parked offset would only rotate a few degrees and
+then stop, which is why an Ordinary stick on a look pad feels dead.
+
+Their own log tag for this path is RELA_JOY.
+
+Packed into the device map as type 10:
+  centre X/Y, speed (and slow-mode speed), associated slow key, mode flags.
+  No radius field.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 5 — HOW BUTTONS WORK
+═══════════════════════════════════════════════════════════════════════════════
+
+Ordinary tap (property 0):
+  One pointer DOWN at (x, y), then UP. Same inject path as sticks.
+  Packed as a key record with only P1 coordinates; P2 unused.
+
+Hold / long press:
+  Same pointer stays down at (x, y) until the physical button is released.
+  No 1-pixel wiggle, no continueStroke.
+
+Turbo:
+  Repeated DOWN/UP at the same point at a chosen frequency.
+
+Other button types exist (aim, flash, combo, macro, bind-to-stick, gyro).
+They are all still “emit pointers through the privileged injector”. They
+are not overlay clicks and not Accessibility gestures.
+
+D-pad / hat is just four tap/hold keys, not a stick.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 6 — PADMAP’S TWO FAILED PATHS, SIDE BY SIDE
+═══════════════════════════════════════════════════════════════════════════════
+
+PadMap currently has:
+
+  Path A — AccessibilityService.dispatchGesture()
+    Callback-driven. TOOL_TYPE_UNKNOWN. Stroke limit. Games that check
+    tool type or want a real pointer stream ignore it.
+
+  Path B — InjectManager in the PadMap process
+    HiddenApiBypass + InputManager.injectInputEvent from the app uid.
+    Method resolves, isAvailable becomes true, events are discarded by
+    the system because the process does not have INJECT_EVENTS.
+
+ShootingPlus has:
+
+  Path C — app_process under adb shell + injectInputEvent
+    Events are accepted. TOOL_TYPE_FINGER. True multi-pointer.
+
+  Path D — their own hardware as a HID digitizer
+    Not available to PadMap.
+
+The overlay look/move toggle in PadMap only changes what happens at the
+radius edge of a single sweep loop. Both PadMap modes still do:
+
+    sweepStep = magnitude * radius / 8 * sensitivity
+    newPos    = currentPos + direction * sweepStep
+    if past 85% of radius:
+        look  → snap to 10% of radius (pointer stays down)
+        move  → clamp at 84% of radius
+
+That is not Ordinary stick and not View stick.
+
+  Ordinary (theirs):  pos = centre + axis * radius          // absolute
+  View (theirs):      pos += axis * speed; reset at edge    // relative
+  PadMap both:        pos += axis * (radius/8); clamp/snap  // hybrid
+
+So even if injection started working tomorrow, walk would drift instead of
+holding a heading, and look would stall instead of spinning.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 7 — WHY CLAUDE’S APPROACH COULD NOT SUCCEED
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Wrong privilege. HiddenApiBypass was treated as “we can inject now”.
+   It only unlocks the symbol. The permission check still fails.
+
+2. Wrong stick math. lookMode was bolted onto the same incremental sweep
+   used for move, instead of two separate ABS / REL generators.
+
+3. Overlay was treated as the capability to overcome. The overlay never
+   needed more capability. The missing capability is a shell/Shizuku
+   injector and the two stick algorithms.
+
+4. dispatchGesture was kept as a “real” path. Competitors that work do
+   not use it for playback.
+
+The earlier octopus-analysis.txt already flagged (1) and the need for a
+16 ms inject loop. That advice was implemented in-process instead of in
+a privileged UserService, which is why v51 still cannot touch a game
+the way ShootingPlus can.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 8 — WHAT PADMAP WOULD NEED (NOT IMPLEMENTED — RESEARCH ONLY)
+═══════════════════════════════════════════════════════════════════════════════
+
+To behave like their overlay sticks/buttons:
+
+  1. Inject from a privileged process (Shizuku UserService is the
+     user-consented version of their adb app_process sidecar).
+     Do not call injectInputEvent from the app uid.
+
+  2. Split stick generation:
+       Move / Ordinary  →  pointer at centre + axis * radius
+       Look / View      →  pointer += axis * speed, UP+DOWN reset at edge
+
+  3. Buttons as real pointer down/up on the same multi-touch event
+     as the sticks, TOOL_TYPE_FINGER, SOURCE_TOUCHSCREEN.
+
+  4. Keep dispatchGesture only as a documented-broken fallback, or drop
+     it. It will not become “good enough” by tuning latch/coast.
+
+  5. Overlay stays a placement / mode editor. Playback must not depend
+     on the overlay window existing.
+
+Do not copy their ADB jar, native .so, or start-script. The architecture
+to match is: privileged inject + ABS stick + REL stick + combined pointers.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 9 — COMPARISON TABLE
+═══════════════════════════════════════════════════════════════════════════════
+
+                          PadMap v51                         ShootingPlus V3
+                          --------------                     -----------------
+Overlay role              placement + hoped-for playback     placement only
+AccessibilityService      yes, used for inject + keys        none
+dispatchGesture           yes (path A)                       never
+in-process injectInput    yes (path B, events dropped)       never
+privileged injectInput    no                                 yes (adb shell)
+HID hardware path         no                                 yes (their box)
+stick modes               one sweep + edge snap              ABS vs REL
+move formula              incremental sweep + clamp          centre + axis*R
+look formula              same sweep + snap to 10% R         += axis*speed, reset
+buttons                   gesture tap or in-process down/up  privileged down/up
+multi-touch packing       InjectManager builds it            same idea, works
+TOOL_TYPE_FINGER          only on path B (dropped)           always
+max pointers              10                                 9
+
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 10 — SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+ShootingPlus got sticks and buttons right because the overlay is only a
+map editor. Playback is a privileged injector plus two different stick
+generators: absolute offset for walk, relative swipe-and-reset for look.
+
+PadMap already has the overlay toggle and an inject helper that looks
+similar on paper. Both failed for the same two reasons: the helper runs
+in the wrong process, and both stick modes still run the same sweep.
+Those are design errors, not “the overlay lacks a capability”.
