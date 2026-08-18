@@ -102,6 +102,15 @@ private fun InjectorCard(skin: AppSkin) {
             .border(1.dp, skin.borderUnfocused, RoundedCornerShape(8.dp))
             .padding(14.dp)
     ) {
+        if (!running) {
+            TextButton(
+                onClick = { shareInjectorLog(ctx, statusText) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
+            }
+            Spacer(Modifier.height(4.dp))
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier

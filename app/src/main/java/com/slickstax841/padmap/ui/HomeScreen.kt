@@ -236,6 +236,12 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 item {
                     SectionLabel("INJECTOR")
                     Spacer(Modifier.height(6.dp))
+                    TextButton(
+                        onClick = { shareInjectorLog(ctx, injectorNote) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
+                    }
                     PermCard(
                         label = injectorNote,
                         instructions = if (!SidecarHost.hasPaired(ctx))
@@ -395,6 +401,16 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
 @Composable private fun SectionLabel(text: String) {
     val skin = LocalAppSkin.current
     Text(text, fontSize = 11.sp, color = skin.textSecondary, letterSpacing = 2.sp, fontFamily = skin.labelFont)
+}
+
+internal fun shareInjectorLog(ctx: Context, text: String) {
+    val body = text.ifBlank { SidecarHost.status }
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "PadMap injector log")
+        putExtra(Intent.EXTRA_TEXT, body)
+    }
+    ctx.startActivity(Intent.createChooser(send, "Share injector log"))
 }
 
 @Composable

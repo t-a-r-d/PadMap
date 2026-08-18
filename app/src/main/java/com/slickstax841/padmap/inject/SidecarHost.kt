@@ -208,7 +208,9 @@ object SidecarHost {
         status = "Starting injector…"
         launchDetached(mgr)
         if (!waitForPing(4000)) {
-            throw IllegalStateException(diagnose(mgr))
+            val detail = diagnose(mgr)
+            status = detail
+            throw IllegalStateException(detail)
         }
         status = "Injector running"
         dropAdb(context)
@@ -266,7 +268,9 @@ object SidecarHost {
                 }
             }
         }
-        throw IllegalStateException(diagnoseRoot(su))
+        val detail = diagnoseRoot(su)
+        status = detail
+        throw IllegalStateException(detail)
     }
 
     private fun startScript(token: String): String {
