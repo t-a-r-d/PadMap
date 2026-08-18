@@ -143,22 +143,20 @@ object SidecarHost {
         val remote = "/data/local/tmp/padmap-sidecar.jar"
         status = "Installing injector…"
         // Do not cp from /storage/emulated/0 — ColorOS FUSE often never returns.
-        pushJar(mgr, readAssetJar(context), remote)
+        val jar = readAssetJar(context)
+        pushJar(mgr, jar, remote)
+        val copied = shell(mgr, "wc -c < $remote").filter { it.isDigit() }.toIntOrNull()
+        if (copied != jar.size) {
+            throw IllegalStateException("Injector copy failed (phone has $copied bytes, expected ${jar.size})")
+        }
         shell(mgr, "chmod 644 $remote")
         shell(mgr, "kill \$(cat /data/local/tmp/padmap-sidecar.pid) 2>/dev/null; true")
         status = "Starting injector…"
-        val start = "CLASSPATH=$remote app_process64 /data/local/tmp " +
-            "com.slickstax841.padmap.sidecar.SidecarMain ${SidecarClient.PORT} ${SidecarClient.TOKEN}"
-        val fallback = start.replace("app_process64", "app_process")
-        shell(mgr, "sh -c '$start </dev/null >/data/local/tmp/padmap-sidecar.log 2>&1 &'")
-        Thread.sleep(400)
-        if (!SidecarClient.ping()) {
-            shell(mgr, "sh -c '$fallback </dev/null >/data/local/tmp/padmap-sidecar.log 2>&1 &'")
-            Thread.sleep(500)
-        }
-        if (!SidecarClient.ping()) {
-            val log = runCatching { shell(mgr, "cat /data/local/tmp/padmap-sidecar.log") }.getOrDefault("")
-            throw IllegalStateException("Sidecar did not start. ${SidecarClient.lastError} $log".trim())
+        launchDetached(mgr, remote)
+        if (!waitForPing(4000)) {
+            val log = runCatching { shell(mgr, "cat /data/local/tmp/padmap-sidecar.log") }.getOrDefault("").trim()
+            val detail = log.ifBlank { "no sidecar log — process never stayed up" }
+            throw IllegalStateException("Sidecar did not start. ${SidecarClient.lastError}. $detail")
         }
         status = "Injector running"
         dropAdb(context)
@@ -167,6 +165,35 @@ object SidecarHost {
     /** Sidecar stays up on localhost. Holding ADB open retriggers ColorOS toasts and resumes. */
     private fun dropAdb(context: Context) {
         runCatching { PadMapAdbManager.get(context).disconnect() }
+    }
+
+    /** New session so closing the ADB stream does not SIGHUP the injector. */
+    private fun launchDetached(mgr: PadMapAdbManager, remote: String) {
+        val cls = "com.slickstax841.padmap.sidecar.SidecarMain"
+        val args = "$cls ${SidecarClient.PORT} ${SidecarClient.TOKEN}"
+        val log = "/data/local/tmp/padmap-sidecar.log"
+        val run = { bin: String ->
+            "CLASSPATH=$remote $bin /data/local/tmp --nice-name=padmap_sidecar $args"
+        }
+        val cmds = listOf(
+            "setsid -f sh -c '${run("app_process64")} </dev/null >$log 2>&1'",
+            "nohup ${run("app_process64")} </dev/null >$log 2>&1 &",
+            "setsid -f sh -c '${run("app_process")} </dev/null >$log 2>&1'",
+            "nohup ${run("app_process")} </dev/null >$log 2>&1 &"
+        )
+        for (cmd in cmds) {
+            shell(mgr, cmd, timeoutMs = 600)
+            if (waitForPing(2000)) return
+        }
+    }
+
+    private fun waitForPing(timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (SidecarClient.ping()) return true
+            Thread.sleep(150)
+        }
+        return false
     }
 
     private fun connectAny(context: Context, mgr: PadMapAdbManager, host: String, port: Int): Boolean {
@@ -227,13 +254,13 @@ object SidecarHost {
         }
     }
 
-    private fun shell(mgr: PadMapAdbManager, command: String): String {
+    private fun shell(mgr: PadMapAdbManager, command: String, timeoutMs: Long = 8000): String {
         val stream = mgr.openStream("shell:$command")
         return try {
             val inp = stream.openInputStream()
             val buf = ByteArray(4096)
             val acc = ByteArrayOutputStream()
-            val deadline = System.currentTimeMillis() + 8000
+            val deadline = System.currentTimeMillis() + timeoutMs
             while (System.currentTimeMillis() < deadline) {
                 val n = try {
                     val avail = runCatching { inp.available() }.getOrDefault(1)

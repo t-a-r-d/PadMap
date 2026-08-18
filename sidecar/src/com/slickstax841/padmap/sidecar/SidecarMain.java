@@ -58,6 +58,7 @@ public final class SidecarMain {
         Injector injector = new Injector();
         if (!injector.init()) {
             System.err.println("padmap-sidecar: injectInputEvent unavailable");
+            System.err.flush();
             System.exit(2);
         }
 
@@ -67,6 +68,7 @@ public final class SidecarMain {
             server.setReuseAddress(true);
         } catch (IOException e) {
             System.err.println("padmap-sidecar: bind failed " + e.getMessage());
+            System.err.flush();
             System.exit(3);
             return;
         }
@@ -76,6 +78,7 @@ public final class SidecarMain {
             pw.close();
         } catch (IOException ignored) {}
         System.out.println("padmap-sidecar: listening " + port);
+        System.out.flush();
 
         while (true) {
             try (Socket socket = server.accept()) {

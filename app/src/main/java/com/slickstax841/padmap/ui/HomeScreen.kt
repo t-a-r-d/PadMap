@@ -66,6 +66,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
     var hasOverlay by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
     var hasA11y by remember { mutableStateOf(isA11yEnabled(ctx)) }
     var hasInjector by remember { mutableStateOf(SidecarClient.isAvailable) }
+    var injectorNote by remember { mutableStateOf(SidecarHost.status) }
     // Scan for a connected gamepad, build a preset from its reported capabilities, and save it.
     // Called on every resume so a newly connected controller is picked up automatically.
     fun scanAndSaveController() {
@@ -156,12 +157,19 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 OverlayManager.instance?.repositionForHome()
                 scanAndSaveController()
                 GameScanner.scan(ctx)
-                if (!hasInjector) {
+                if (hasInjector) {
+                    injectorNote = "Injector running"
+                } else {
                     scope.launch {
-                        val ok = withContext(Dispatchers.IO) {
-                            runCatching { SidecarHost.ensureRunning(ctx) }.getOrDefault(false)
+                        val result = withContext(Dispatchers.IO) {
+                            runCatching { SidecarHost.ensureRunning(ctx) }
                         }
-                        hasInjector = ok || SidecarClient.isAvailable
+                        hasInjector = result.getOrDefault(false) || SidecarClient.isAvailable
+                        val note = result.exceptionOrNull()?.message ?: SidecarHost.status
+                        injectorNote = note
+                        result.exceptionOrNull()?.let {
+                            Toast.makeText(ctx, it.message ?: "Injector failed", Toast.LENGTH_LONG).show()
+                        }
                     }
                 }
             }
@@ -228,7 +236,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     SectionLabel("INJECTOR")
                     Spacer(Modifier.height(6.dp))
                     PermCard(
-                        label = SidecarHost.status,
+                        label = injectorNote,
                         instructions = if (!SidecarHost.hasPaired(ctx))
                             "First time: Settings \u2192 OPEN DEVELOPER. Stay on Pair with pairing code and use the top bar."
                         else
@@ -394,8 +402,12 @@ private fun PermCard(label: String, instructions: String, onFix: () -> Unit) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(skin.surfaceCol).padding(14.dp)
     ) {
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.Top) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Text("\u2715", color = Color(0xFFCC3333), fontSize = 18.sp)
                 Text(label, color = skin.textPrimary)
             }
