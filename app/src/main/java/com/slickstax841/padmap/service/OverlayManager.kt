@@ -324,7 +324,12 @@ class OverlayManager(private val context: Context) {
                     iconView?.let { runCatching { wm.updateViewLayout(it, iconParams) } }
                     true
                 }
-                MotionEvent.ACTION_UP -> { view.alpha = 0.85f; if (!moved) enterConfigModeFromIcon(); true }
+                MotionEvent.ACTION_UP -> {
+                    view.alpha = 0.85f
+                    if (!moved && PadMapAccessibilityService.instance?.isPlaybackBusy != true)
+                        enterConfigModeFromIcon()
+                    true
+                }
                 else -> false
             }
         }

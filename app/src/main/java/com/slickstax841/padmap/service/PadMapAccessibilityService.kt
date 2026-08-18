@@ -68,9 +68,13 @@ class PadMapAccessibilityService : AccessibilityService() {
     private val hatState = mutableMapOf<String, Boolean>()
     private val stickDeadTicks = mutableMapOf<String, Int>()
     private var inFlightTaps = 0
+    private var playbackGen = 0
     private val freePointerIds = ArrayDeque<Int>().apply { addAll(0..9) }
     val activeHoldCount: Int get() = activeHolds.size
     val activeStickCount: Int get() = activeSticks.size
+    val isPlaybackBusy: Boolean
+        get() = activeHolds.isNotEmpty() || activeSticks.isNotEmpty() ||
+            inFlightTaps > 0 || turboJobs.isNotEmpty() || tapRepeatJobs.isNotEmpty()
 
     private var stickLoopRunning = false
     private var lastSidecarWarnMs = 0L
@@ -192,13 +196,19 @@ class PadMapAccessibilityService : AccessibilityService() {
         hatState.clear()
         SidecarClient.releaseAll()
         inFlightTaps = 0
+        playbackGen++
         OverlayManager.instance?.setIconPassThrough(false)
         PlaybackDebug.log("playback released")
     }
 
     private fun syncIconPassThrough() {
-        val busy = activeHolds.isNotEmpty() || activeSticks.isNotEmpty() || inFlightTaps > 0
-        OverlayManager.instance?.setIconPassThrough(busy)
+        OverlayManager.instance?.setIconPassThrough(isPlaybackBusy)
+    }
+
+    private fun canInject(): Boolean {
+        if (playingPackage.isEmpty()) return false
+        if (OverlayManager.instance?.state == OverlayManager.State.CONFIG) return false
+        return true
     }
 
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
@@ -453,26 +463,29 @@ class PadMapAccessibilityService : AccessibilityService() {
         val nonTurbo = entries.filter { !it.turbo }
         val turboEntries = entries.filter { it.turbo }
         val mode = nonTurbo.firstOrNull()?.let { ButtonTuningStore.get(it.zoneId).mode } ?: ButtonMode.HOLD
-        when (mode) {
-            ButtonMode.HOLD -> {
-                if (activeHolds.containsKey(label)) {
-                    PlaybackDebug.log("btn $label re-down")
-                    releaseHold(label)
-                }
-                startHold(label, nonTurbo)
-            }
-            ButtonMode.TAP -> fireTaps(nonTurbo)
-            ButtonMode.REPEAT -> {
-                if (tapRepeatJobs.containsKey(label)) return
-                tapRepeatJobs[label] = scope.launch {
-                    while (isActive) {
-                        val captured = nonTurbo.toList()
-                        val interval = captured.firstOrNull()
-                            ?.let { ButtonTuningStore.get(it.zoneId).repeatIntervalMs }
-                            ?: TURBO_INTERVAL_MS
-                        mainHandler.post { fireTaps(captured) }
-                        delay(interval)
+        if (nonTurbo.isNotEmpty()) {
+            when (mode) {
+                ButtonMode.HOLD -> {
+                    if (activeHolds.containsKey(label)) {
+                        PlaybackDebug.log("btn $label re-down")
+                        releaseHold(label)
                     }
+                    startHold(label, nonTurbo)
+                }
+                ButtonMode.TAP -> fireTaps(nonTurbo)
+                ButtonMode.REPEAT -> {
+                    if (tapRepeatJobs.containsKey(label)) return
+                    tapRepeatJobs[label] = scope.launch {
+                        while (isActive) {
+                            val captured = nonTurbo.toList()
+                            val interval = captured.firstOrNull()
+                                ?.let { ButtonTuningStore.get(it.zoneId).repeatIntervalMs }
+                                ?: TURBO_INTERVAL_MS
+                            mainHandler.post { fireTaps(captured) }
+                            delay(interval)
+                        }
+                    }
+                    syncIconPassThrough()
                 }
             }
         }
@@ -485,6 +498,7 @@ class PadMapAccessibilityService : AccessibilityService() {
                     delay(TURBO_INTERVAL_MS)
                 }
             }
+            syncIconPassThrough()
         }
     }
 
@@ -503,6 +517,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         }
         turboJobs[label]?.cancel()
         turboJobs.remove(label)
+        syncIconPassThrough()
     }
 
     private fun startHold(label: String, entries: List<MappingEntry>) {
@@ -542,7 +557,8 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     private fun fireTaps(entries: List<MappingEntry>) {
-        if (entries.isEmpty() || !sidecarReady()) return
+        if (entries.isEmpty() || !sidecarReady() || !canInject()) return
+        val gen = playbackGen
         entries.forEach { entry ->
             val t = ButtonTuningStore.get(entry.zoneId)
             val (x, y) = tapXY(entry)
@@ -552,22 +568,28 @@ class PadMapAccessibilityService : AccessibilityService() {
             }
             inFlightTaps++
             syncIconPassThrough()
+            val holdMs = t.tapDurationMs.coerceIn(16L, 80L)
+            val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+            fun finish(up: Boolean) {
+                if (!finished.compareAndSet(false, true)) return
+                if (up) SidecarClient.pointerUp(pid)
+                freePointer(pid)
+                inFlightTaps = (inFlightTaps - 1).coerceAtLeast(0)
+                syncIconPassThrough()
+            }
             scope.launch {
                 try {
-                    mainHandler.post { SidecarClient.pointerDown(pid, x, y) }
-                    delay(t.tapDurationMs.coerceAtLeast(16L))
                     mainHandler.post {
-                        SidecarClient.pointerUp(pid)
-                        freePointer(pid)
-                        inFlightTaps = (inFlightTaps - 1).coerceAtLeast(0)
-                        syncIconPassThrough()
+                        if (gen != playbackGen || !canInject()) {
+                            finish(up = false)
+                            return@post
+                        }
+                        SidecarClient.pointerDown(pid, x, y)
                     }
+                    delay(holdMs)
+                    mainHandler.post { finish(up = true) }
                 } catch (_: Throwable) {
-                    freePointer(pid)
-                    mainHandler.post {
-                        inFlightTaps = (inFlightTaps - 1).coerceAtLeast(0)
-                        syncIconPassThrough()
-                    }
+                    mainHandler.post { finish(up = false) }
                 }
             }
         }

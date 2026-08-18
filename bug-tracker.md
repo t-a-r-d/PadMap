@@ -160,6 +160,27 @@ A11y already delivers pad keys/motion (v67). The catcher is not needed to play.
 
 ---
 
+## BUG-010 — Turbo press closes the overlay and kills all controls
+
+**Status:** in progress
+**Reported:** 2026-08-18 on PadMap v68
+
+Set a zone to turbo, press that button: the overlay menu closes and afterwards no controls work.
+
+### Cause
+
+Turbo `fireTaps` every 100ms. Between taps the menu icon is touchable again, so an injected down can hit the icon (`enterConfigModeFromIcon`), which `releaseAllPlayback`s and opens CONFIG. In-flight taps then land on the full-screen overlay and can hit ✕ (`exitConfigMode`). Pointer ids also leak if tap duration ≥ interval (10 slots gone → nothing allocates).
+
+### Attempts
+
+- [in progress] Keep the icon not-touchable for the whole turbo/repeat job, not just each tap. Ignore icon taps while playback is busy. Drop in-flight taps if CONFIG opens or playback is released. Reuse one pointer per turbo tap instead of leaking the pool.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-009 — Zone under the menu icon does not fire until the icon is moved
 
 **Status:** in progress
