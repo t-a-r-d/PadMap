@@ -47,6 +47,17 @@ public final class SidecarMain {
     private static final int MAX_POINTERS = 10;
 
     public static void main(String[] args) {
+        if (args != null && args.length > 0 && "check".equals(args[0])) {
+            Injector injector = new Injector();
+            if (!injector.init()) {
+                System.err.println("padmap-sidecar: check inject unavailable");
+                System.err.flush();
+                System.exit(2);
+            }
+            System.out.println("padmap-sidecar: check ok");
+            System.out.flush();
+            System.exit(0);
+        }
         int port = 18741;
         String token = "padmap-sidecar";
         if (args != null && args.length > 0) {

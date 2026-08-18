@@ -24,6 +24,7 @@ object SidecarHost {
     private const val REMOTE_SH = "/data/local/tmp/padmap-start.sh"
     private const val REMOTE_PID = "/data/local/tmp/padmap-sidecar.pid"
     private const val REMOTE_LOG = "/data/local/tmp/padmap-sidecar.log"
+    private const val REMOTE_PROBE = "/data/local/tmp/padmap-probe.log"
 
     @Volatile
     var status: String = "Injector not started"
@@ -276,11 +277,12 @@ object SidecarHost {
     private fun startScript(token: String): String {
         return """
             #!/system/bin/sh
+            export ANDROID_DATA=/data
+            export ANDROID_ROOT=/system
+            export CLASSPATH=$REMOTE_JAR
             BIN=/system/bin/app_process64
             if [ ! -x ${'$'}BIN ]; then BIN=/system/bin/app_process; fi
-            if [ ! -x ${'$'}BIN ]; then BIN=app_process64; fi
-            export CLASSPATH=$REMOTE_JAR
-            exec ${'$'}BIN --nice-name=padmap_sidecar /data/local/tmp com.slickstax841.padmap.sidecar.SidecarMain ${SidecarClient.PORT} $token
+            exec ${'$'}BIN -Djava.class.path=$REMOTE_JAR /data/local/tmp com.slickstax841.padmap.sidecar.SidecarMain ${SidecarClient.PORT} $token
         """.trimIndent() + "\n"
     }
 
@@ -326,18 +328,27 @@ object SidecarHost {
         lastLaunchNotes = ""
         pushText(mgr, startScript(SidecarClient.authToken), REMOTE_SH)
         shell(mgr, "chmod 755 $REMOTE_SH")
-        val cmds = listOf(
-            "nohup $REMOTE_SH </dev/null >$REMOTE_LOG 2>&1 &",
-            "setsid -f $REMOTE_SH </dev/null >$REMOTE_LOG 2>&1",
-            "sh -c '$REMOTE_SH </dev/null >$REMOTE_LOG 2>&1 &'"
-        )
         val acc = StringBuilder()
-        for (cmd in cmds) {
-            val out = shell(mgr, cmd, timeoutMs = 1500).trim()
-            acc.append(cmd).append(" -> ").append(out.ifBlank { "(no output)" }).append('\n')
-            lastLaunchNotes = acc.toString()
-            if (waitForPing(3000)) return
-        }
+        val probe = shell(
+            mgr,
+            "export ANDROID_DATA=/data; export ANDROID_ROOT=/system; export CLASSPATH=$REMOTE_JAR; " +
+                "/system/bin/app_process64 -Djava.class.path=$REMOTE_JAR /data/local/tmp " +
+                "com.slickstax841.padmap.sidecar.SidecarMain check >$REMOTE_PROBE 2>&1; echo CHECK_EXIT:${'$'}?",
+            timeoutMs = 6000
+        ).trim()
+        val probeLog = shell(mgr, "cat $REMOTE_PROBE 2>/dev/null").trim()
+        acc.append("PROBE: ").append(probe.ifBlank { "(no output)" })
+        if (probeLog.isNotBlank()) acc.append(" | ").append(probeLog)
+        acc.append('\n')
+        lastLaunchNotes = acc.toString()
+        val detach = shell(
+            mgr,
+            "nohup $REMOTE_SH </dev/null >$REMOTE_LOG 2>&1 & echo FORK:${'$'}!",
+            timeoutMs = 2000
+        ).trim()
+        acc.append("DETACH: ").append(detach.ifBlank { "(no output)" })
+        lastLaunchNotes = acc.toString()
+        waitForPing(4000)
     }
 
     private fun pushText(mgr: PadMapAdbManager, text: String, remote: String) {
@@ -368,8 +379,11 @@ object SidecarHost {
                 "echo BIN64:\$(ls -l /system/bin/app_process64 2>&1); " +
                 "echo BIN:\$(ls -l /system/bin/app_process 2>&1); " +
                 "echo SCRIPT:\$(ls -l $REMOTE_SH 2>&1); " +
+                "echo SCRIPTTEXT:; cat $REMOTE_SH 2>/dev/null; " +
                 "echo LOGFILE:\$(ls -l $REMOTE_LOG 2>&1); " +
-                "echo LOG:; cat $REMOTE_LOG 2>/dev/null",
+                "echo LOG:; cat $REMOTE_LOG 2>/dev/null; " +
+                "echo PROBEFILE:; cat $REMOTE_PROBE 2>/dev/null; " +
+                "echo LOGCAT:; logcat -d -t 40 -s AndroidRuntime:E AndroidRuntime:W 2>/dev/null | tail -20",
             timeoutMs = 8000
         ).trim()
         return buildString {

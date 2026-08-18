@@ -7,7 +7,7 @@ CC reads this before investigating any bug.
 
 ## BUG-001 — Wireless debugging “connected” toast loops (Oppo A40)
 
-**Status:** v56 on device. Toast-loop text not reported this time. Sidecar still not up.
+**Status:** v58 on device. Sidecar still not up. Toast loop not reported.
 **Reported:** 2026-08-18 on Oppo A40 / ColorOS, PadMap v54
 
 After pairing, PadMap reaches wireless ADB, then Android’s “Wireless debugging connected” toast keeps sliding down. Looks like connect → drop → connect.
@@ -21,10 +21,11 @@ Home `ON_RESUME` calls `SidecarHost.ensureRunning`. `connect()` shows ColorOS’
 - [in progress] One auto-connect per process from Home resume. Overlapping `ensureRunning` returns immediately. Drop ADB after the sidecar pings (sidecar is localhost; holding wireless ADB retriggers ColorOS). Settings **START** still force-retries. Not on an APK until Damien says to build.
 - [in progress] 2026-08-18 Home showed `Sidecar did not start ECONNREFUSED` then the text vanished. Same loop: next resume overwrites `SidecarHost.status`. Also the start command is `sh -c 'app_process &'` over an ADB shell stream — closing that stream SIGHUPs the child, so nothing is left on port 18741. Next APK: `setsid`/`nohup` so the sidecar survives ADB disconnect, poll ping, keep the failure on the Home card.
 - [failed] v56 on A40: copy succeeded, then `Sidecar did not start` / connect to 18741 from 40744 refused / never stayed up. Empty sidecar log. `setsid`/`nohup` one-liners did not leave a process. 40744 is PadMap’s ephemeral source port, not ADB. Next: `--nice-name` after the directory makes `app_process` treat it as the class; `nohup CLASSPATH=...` treats the env assign as the executable. Start via a script (`--nice-name` before the dir), keep launch output, dump jar/ps/log on failure.
+- [failed] v58 on A40: jar 6861 ok, script 335 bytes +x, app_process64 present. PID empty, log 0 bytes, ps is only the PadMap app. All three launch cmds returned no output. Later `>` launches wiped any first-attempt log; last cmd had no nohup so ADB close would SIGHUP it. Next: drop `--nice-name`, set ANDROID_DATA/ANDROID_ROOT and `-Djava.class.path`, run a foreground `check` once to keep ART’s error, then one nohup start (do not truncate), include probe + logcat in the share dump.
 
 ### Not tried
 
-- Device confirmation that the toast loop is gone on v56+ (not reported on this v56 try).
+- Device confirmation that the toast loop is gone on v56+ (not reported).
 
 ---
 
