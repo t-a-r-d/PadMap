@@ -66,7 +66,9 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
     var hasOverlay by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
     var hasA11y by remember { mutableStateOf(isA11yEnabled(ctx)) }
     var hasInjector by remember { mutableStateOf(SidecarClient.isAvailable) }
-    var injectorNote by remember { mutableStateOf(SidecarHost.status) }
+    var injectorNote by remember {
+        mutableStateOf(if (SidecarClient.isAvailable) "Injector running" else "Injector not running")
+    }
     // Scan for a connected gamepad, build a preset from its reported capabilities, and save it.
     // Called on every resume so a newly connected controller is picked up automatically.
     fun scanAndSaveController() {
@@ -166,10 +168,9 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                             runCatching { SidecarHost.ensureRunning(ctx) }
                         }
                         hasInjector = result.getOrDefault(false) || SidecarClient.isAvailable
-                        val note = result.exceptionOrNull()?.message ?: SidecarHost.status
-                        injectorNote = note
+                        injectorNote = if (hasInjector) "Injector running" else "Injector not running"
                         result.exceptionOrNull()?.let {
-                            Toast.makeText(ctx, it.message ?: "Injector failed", Toast.LENGTH_LONG).show()
+                            Toast.makeText(ctx, "Injector failed — open Settings for the log", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
@@ -236,18 +237,12 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 item {
                     SectionLabel("INJECTOR")
                     Spacer(Modifier.height(6.dp))
-                    TextButton(
-                        onClick = { shareInjectorLog(ctx, injectorNote) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
-                    }
                     PermCard(
                         label = injectorNote,
                         instructions = if (!SidecarHost.hasPaired(ctx))
                             "First time: Settings \u2192 OPEN DEVELOPER. Stay on Pair with pairing code and use the top bar."
                         else
-                            "PadMap already paired. If Wireless debugging is on and this still shows, tap here — Oppo often hides the AOSP flag. Settings shows the real error."
+                            "PadMap already paired. Open Settings for the log and START."
                     ) { onSettings() }
                     Spacer(Modifier.height(8.dp))
                 }

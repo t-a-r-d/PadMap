@@ -83,9 +83,10 @@ private fun InjectorCard(skin: AppSkin) {
     var busy by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(SidecarClient.isAvailable) }
     var paired by remember { mutableStateOf(SidecarHost.hasPaired(ctx)) }
+    var logText by remember { mutableStateOf(SidecarHost.status) }
 
     val dotColor = if (running) Color(0xFF00DD66) else Color(0xFFFF8800)
-    val statusText = if (running) "Injector running" else SidecarHost.status
+    val statusText = if (running) "Injector running" else "Injector not running"
 
     fun openDeveloper() {
         if (!paired) PairOverlay.show(ctx)
@@ -102,15 +103,6 @@ private fun InjectorCard(skin: AppSkin) {
             .border(1.dp, skin.borderUnfocused, RoundedCornerShape(8.dp))
             .padding(14.dp)
     ) {
-        if (!running) {
-            TextButton(
-                onClick = { shareInjectorLog(ctx, statusText) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
-            }
-            Spacer(Modifier.height(4.dp))
-        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
@@ -121,6 +113,21 @@ private fun InjectorCard(skin: AppSkin) {
             Spacer(Modifier.width(10.dp))
             Text(statusText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                 color = skin.textPrimary, fontFamily = skin.labelFont)
+        }
+        if (!running) {
+            Spacer(Modifier.height(8.dp))
+            TextButton(
+                onClick = { shareInjectorLog(ctx, logText) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
+            }
+            Text(
+                logText,
+                fontSize = 11.sp,
+                color = skin.textSecondary,
+                fontFamily = skin.labelFont
+            )
         }
         Spacer(Modifier.height(8.dp))
         Text(
@@ -171,11 +178,12 @@ private fun InjectorCard(skin: AppSkin) {
                             }
                             busy = false
                             running = SidecarClient.isAvailable
+                            logText = result.exceptionOrNull()?.message ?: SidecarHost.status
                             result.exceptionOrNull()?.let {
-                                Toast.makeText(ctx, it.message ?: "Start failed", Toast.LENGTH_LONG).show()
+                                Toast.makeText(ctx, "Start failed — log is above", Toast.LENGTH_SHORT).show()
                             } ?: Toast.makeText(
                                 ctx,
-                                if (running) "Injector running" else SidecarHost.status,
+                                if (running) "Injector running" else "Start failed — log is above",
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -208,8 +216,9 @@ private fun InjectorCard(skin: AppSkin) {
                             busy = false
                             running = SidecarClient.isAvailable
                             paired = SidecarHost.hasPaired(ctx)
+                            logText = result.exceptionOrNull()?.message ?: SidecarHost.status
                             result.exceptionOrNull()?.let {
-                                Toast.makeText(ctx, it.message ?: "Pair failed", Toast.LENGTH_LONG).show()
+                                Toast.makeText(ctx, "Pair failed — log is above", Toast.LENGTH_SHORT).show()
                             } ?: Toast.makeText(ctx, "Injector running — you will not need the code again", Toast.LENGTH_LONG).show()
                         }
                     }
