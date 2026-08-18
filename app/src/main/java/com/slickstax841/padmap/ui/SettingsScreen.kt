@@ -8,6 +8,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
@@ -41,7 +43,10 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     SkinBackground(Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onBack) { Text("\u2190", color = skin.accent, fontSize = 20.sp) }
@@ -83,7 +88,7 @@ private fun InjectorCard(skin: AppSkin) {
     var busy by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(SidecarClient.isAvailable) }
     var paired by remember { mutableStateOf(SidecarHost.hasPaired(ctx)) }
-    var logText by remember { mutableStateOf(SidecarHost.status) }
+    var logText by remember { mutableStateOf(SidecarHost.lastDump.ifBlank { SidecarHost.status }) }
 
     val dotColor = if (running) Color(0xFF00DD66) else Color(0xFFFF8800)
     val statusText = if (running) "Injector running" else "Injector not running"
@@ -113,21 +118,6 @@ private fun InjectorCard(skin: AppSkin) {
             Spacer(Modifier.width(10.dp))
             Text(statusText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                 color = skin.textPrimary, fontFamily = skin.labelFont)
-        }
-        if (!running) {
-            Spacer(Modifier.height(8.dp))
-            TextButton(
-                onClick = { shareInjectorLog(ctx, logText) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
-            }
-            Text(
-                logText,
-                fontSize = 11.sp,
-                color = skin.textSecondary,
-                fontFamily = skin.labelFont
-            )
         }
         Spacer(Modifier.height(8.dp))
         Text(
@@ -178,12 +168,12 @@ private fun InjectorCard(skin: AppSkin) {
                             }
                             busy = false
                             running = SidecarClient.isAvailable
-                            logText = result.exceptionOrNull()?.message ?: SidecarHost.status
+                            logText = bestInjectorLog(result.exceptionOrNull()?.message)
                             result.exceptionOrNull()?.let {
-                                Toast.makeText(ctx, "Start failed — log is above", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(ctx, "Start failed — log is under START", Toast.LENGTH_SHORT).show()
                             } ?: Toast.makeText(
                                 ctx,
-                                if (running) "Injector running" else "Start failed — log is above",
+                                if (running) "Injector running" else "Start failed — log is under START",
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -216,14 +206,30 @@ private fun InjectorCard(skin: AppSkin) {
                             busy = false
                             running = SidecarClient.isAvailable
                             paired = SidecarHost.hasPaired(ctx)
-                            logText = result.exceptionOrNull()?.message ?: SidecarHost.status
+                            logText = bestInjectorLog(result.exceptionOrNull()?.message)
                             result.exceptionOrNull()?.let {
-                                Toast.makeText(ctx, "Pair failed — log is above", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(ctx, "Pair failed — log is under START", Toast.LENGTH_SHORT).show()
                             } ?: Toast.makeText(ctx, "Injector running — you will not need the code again", Toast.LENGTH_LONG).show()
                         }
                     }
                 ) { Text(if (busy) "WORKING…" else "PAIR ONCE", color = skin.accent, fontSize = 12.sp) }
             }
+        }
+        if (logText.isNotBlank() && logText != "Injector running") {
+            Spacer(Modifier.height(12.dp))
+            TextButton(
+                onClick = { shareInjectorLog(ctx, logText) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
+            }
+            Text(
+                logText,
+                fontSize = 11.sp,
+                color = skin.textPrimary,
+                fontFamily = skin.labelFont,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }

@@ -398,6 +398,14 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
     Text(text, fontSize = 11.sp, color = skin.textSecondary, letterSpacing = 2.sp, fontFamily = skin.labelFont)
 }
 
+internal fun bestInjectorLog(preferred: String?): String {
+    return listOfNotNull(preferred, SidecarHost.lastDump, SidecarHost.status)
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .maxByOrNull { it.length }
+        ?: ""
+}
+
 internal fun shareInjectorLog(ctx: Context, text: String) {
     val body = text.ifBlank { SidecarHost.status }
     val send = Intent(Intent.ACTION_SEND).apply {

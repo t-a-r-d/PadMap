@@ -30,6 +30,10 @@ object SidecarHost {
     var status: String = "Injector not started"
         private set
 
+    @Volatile
+    var lastDump: String = ""
+        private set
+
     @Volatile private var inProgress = false
     @Volatile private var lastAttemptMs = 0L
     @Volatile private var autoTriedThisProcess = false
@@ -211,6 +215,7 @@ object SidecarHost {
         if (!waitForPing(4000)) {
             val detail = diagnose(mgr)
             status = detail
+            lastDump = detail
             throw IllegalStateException(detail)
         }
         status = "Injector running"
@@ -271,6 +276,7 @@ object SidecarHost {
         }
         val detail = diagnoseRoot(su)
         status = detail
+        lastDump = detail
         throw IllegalStateException(detail)
     }
 
