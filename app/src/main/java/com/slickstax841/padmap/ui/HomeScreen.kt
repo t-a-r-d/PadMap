@@ -43,6 +43,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.slickstax841.padmap.data.ControllerPreset
 import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.data.GameLayout
+import com.slickstax841.padmap.data.GameScanner
 import com.slickstax841.padmap.inject.SidecarClient
 import com.slickstax841.padmap.service.OverlayManager
 import com.slickstax841.padmap.service.PadMapAccessibilityService
@@ -147,6 +148,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 hasInjector = SidecarClient.ping()
                 OverlayManager.instance?.repositionForHome()
                 scanAndSaveController()
+                GameScanner.scan(ctx)
             }
         }
         lifecycle.addObserver(observer)
@@ -241,7 +243,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(skin.surfaceCol).padding(14.dp), Arrangement.SpaceBetween) {
                     Column {
                         Text("Layout", fontSize = 11.sp, color = skin.textSecondary)
-                        Text(appData.gameLayouts.find { it.id == appData.activeLayoutId }?.name ?: "None", color = skin.textPrimary, fontWeight = FontWeight.Medium)
+                        Text(appData.gameLayouts.find { it.id == appData.activeLayoutId && !it.archived }?.name ?: "None", color = skin.textPrimary, fontWeight = FontWeight.Medium)
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text("Controller", fontSize = 11.sp, color = skin.textSecondary)
@@ -280,17 +282,26 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 Spacer(Modifier.height(4.dp))
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     SectionLabel("GAME LAYOUTS")
-                    TextButton(onClick = {
-                        val id = UUID.randomUUID().toString()
-                        DataStore.update { it.copy(gameLayouts = it.gameLayouts + GameLayout(id = id, name = "New Game")) }
-                        onEditLayout(id)
-                    }) { Text("+ ADD", color = skin.accent, fontSize = 12.sp) }
+                    Row {
+                        TextButton(onClick = {
+                            val result = GameScanner.scan(ctx)
+                            Toast.makeText(ctx, result.summary(), Toast.LENGTH_SHORT).show()
+                        }) { Text("SCAN", color = skin.accent, fontSize = 12.sp) }
+                        TextButton(onClick = {
+                            val id = UUID.randomUUID().toString()
+                            DataStore.update { it.copy(gameLayouts = it.gameLayouts + GameLayout(id = id, name = "New Game")) }
+                            onEditLayout(id)
+                        }) { Text("+ ADD", color = skin.accent, fontSize = 12.sp) }
+                    }
                 }
             }
 
-            if (appData.gameLayouts.isEmpty()) item { EmptyHint("No layouts. Tap + ADD to create one.") }
+            val liveLayouts = appData.gameLayouts.filter { !it.archived }
+            val archivedLayouts = appData.gameLayouts.filter { it.archived }
 
-            items(appData.gameLayouts) { layout ->
+            if (liveLayouts.isEmpty()) item { EmptyHint("No layouts. Tap SCAN or + ADD.") }
+
+            items(liveLayouts, key = { it.id }) { layout ->
                 ItemCard(
                     title = layout.name,
                     subtitle = "${layout.mappings.size} zones" + if (layout.packageName.isNotBlank()) " \u00b7 ${layout.packageName}" else "",
@@ -301,6 +312,44 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     onEdit = { onEditLayout(layout.id) },
                     onDelete = { DataStore.update { it.copy(gameLayouts = it.gameLayouts.filter { l -> l.id != layout.id }) } }
                 )
+            }
+
+            if (archivedLayouts.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(4.dp))
+                    SectionLabel("ARCHIVE")
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Uninstalled games. Layouts come back if you reinstall.",
+                        fontSize = 12.sp,
+                        color = skin.textSecondary
+                    )
+                }
+                items(archivedLayouts, key = { it.id }) { layout ->
+                    ItemCard(
+                        title = layout.name,
+                        subtitle = "archived \u00b7 ${layout.mappings.size} zones" +
+                            if (layout.packageName.isNotBlank()) " \u00b7 ${layout.packageName}" else "",
+                        isActive = false,
+                        leadingIcon = null,
+                        showEdit = false,
+                        onSelect = {
+                            Toast.makeText(ctx, "Reinstall the game to restore this layout", Toast.LENGTH_SHORT).show()
+                        },
+                        onEdit = {},
+                        onDelete = {
+                            DataStore.update { data ->
+                                val next = data.gameLayouts.filter { l -> l.id != layout.id }
+                                data.copy(
+                                    gameLayouts = next,
+                                    activeLayoutId = if (data.activeLayoutId == layout.id)
+                                        next.firstOrNull { !it.archived }?.id ?: ""
+                                    else data.activeLayoutId
+                                )
+                            }
+                        }
+                    )
+                }
             }
 
             item { Spacer(Modifier.height(40.dp)) }

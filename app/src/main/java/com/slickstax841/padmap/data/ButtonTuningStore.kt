@@ -12,7 +12,7 @@ data class ModeSettings(
 )
 
 data class ButtonTuning(
-    var mode: ButtonMode = ButtonMode.TAP,
+    var mode: ButtonMode = ButtonMode.HOLD,
     val modeSettings: MutableMap<ButtonMode, ModeSettings> = ButtonMode.values()
         .associateWith { ModeSettings() }.toMutableMap()
 ) {

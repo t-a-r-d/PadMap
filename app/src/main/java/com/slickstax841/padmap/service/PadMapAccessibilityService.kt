@@ -209,8 +209,15 @@ class PadMapAccessibilityService : AccessibilityService() {
                 OverlayManager.instance?.repositionForGame(pkg)
                 val layoutMatch = DataStore.data.value.gameLayouts.find { it.packageName == pkg }
                 if (layoutMatch != null) {
-                    if (DataStore.data.value.activeLayoutId != layoutMatch.id) {
-                        DataStore.update { it.copy(activeLayoutId = layoutMatch.id) }
+                    if (layoutMatch.archived || DataStore.data.value.activeLayoutId != layoutMatch.id) {
+                        DataStore.update { data ->
+                            data.copy(
+                                gameLayouts = if (layoutMatch.archived)
+                                    data.gameLayouts.map { if (it.id == layoutMatch.id) it.copy(archived = false) else it }
+                                else data.gameLayouts,
+                                activeLayoutId = layoutMatch.id
+                            )
+                        }
                         updateInputInterception()
                     }
                 } else if (isGameOrUnknownApp(pkg)) {
@@ -354,7 +361,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         if (entries.isEmpty() || !sidecarReady()) return
         val nonTurbo = entries.filter { !it.turbo }
         val turboEntries = entries.filter { it.turbo }
-        val mode = nonTurbo.firstOrNull()?.let { ButtonTuningStore.get(it.zoneId).mode } ?: ButtonMode.TAP
+        val mode = nonTurbo.firstOrNull()?.let { ButtonTuningStore.get(it.zoneId).mode } ?: ButtonMode.HOLD
         when (mode) {
             ButtonMode.HOLD -> startHold(label, nonTurbo)
             ButtonMode.TAP -> fireTaps(nonTurbo)
@@ -387,7 +394,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     private fun onButtonUp(label: String) {
         val layout = DataStore.activeLayout ?: return
         val mode = layout.mappings.filter { it.inputName == label && !it.turbo }
-            .firstOrNull()?.let { ButtonTuningStore.get(it.zoneId).mode } ?: ButtonMode.TAP
+            .firstOrNull()?.let { ButtonTuningStore.get(it.zoneId).mode } ?: ButtonMode.HOLD
         when (mode) {
             ButtonMode.HOLD -> releaseHold(label)
             ButtonMode.TAP -> {}

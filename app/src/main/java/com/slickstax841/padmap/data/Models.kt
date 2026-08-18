@@ -19,7 +19,9 @@ data class GameLayout(
     val name: String = "",
     val packageName: String = "",
     val controllerPresetId: String = "",
-    val mappings: List<MappingEntry> = emptyList()
+    val mappings: List<MappingEntry> = emptyList(),
+    // Uninstalled games stay here so zones come back if the user reinstalls.
+    val archived: Boolean = false
 )
 
 @Serializable

@@ -33,7 +33,7 @@ object DataStore {
     }
 
     val activeLayout: GameLayout?
-        get() = _data.value.gameLayouts.find { it.id == _data.value.activeLayoutId }
+        get() = _data.value.gameLayouts.find { it.id == _data.value.activeLayoutId && !it.archived }
 
     val activePreset: ControllerPreset?
         get() = _data.value.controllerPresets.find { it.id == _data.value.activePresetId }

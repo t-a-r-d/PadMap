@@ -313,6 +313,13 @@ class OverlayManager(private val context: Context) {
             val data = DataStore.data.value
             val existing = data.gameLayouts.find { it.packageName == pkg }
             if (existing != null) {
+                if (existing.archived) {
+                    DataStore.update { d ->
+                        d.copy(gameLayouts = d.gameLayouts.map {
+                            if (it.id == existing.id) it.copy(archived = false) else it
+                        })
+                    }
+                }
                 loadLayout(existing.id)
             } else {
                 val newId = UUID.randomUUID().toString()
