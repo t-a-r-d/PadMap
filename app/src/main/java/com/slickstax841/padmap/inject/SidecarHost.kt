@@ -374,7 +374,7 @@ object SidecarHost {
                 append(" Launch: ").append(lastLaunchNotes.trim())
             }
             if (dump.isNotBlank()) {
-                append(" Phone: ").append(dump.replace('\n', ' | '))
+                append(" Phone: ").append(dump.replace("\n", " | "))
             }
         }
     }
@@ -393,7 +393,7 @@ object SidecarHost {
         return buildString {
             append(refusedExplain())
             if (dump.isNotBlank()) {
-                append(" Phone: ").append(dump.replace('\n', ' | '))
+                append(" Phone: ").append(dump.replace("\n", " | "))
             }
         }
     }
