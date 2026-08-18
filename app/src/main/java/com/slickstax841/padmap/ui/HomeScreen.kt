@@ -41,12 +41,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.slickstax841.padmap.R
 import com.slickstax841.padmap.data.ControllerPreset
 import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.data.GameLayout
 import com.slickstax841.padmap.data.GameScanner
 import com.slickstax841.padmap.inject.SidecarClient
+import com.slickstax841.padmap.inject.SidecarHost
 import com.slickstax841.padmap.service.OverlayManager
 import com.slickstax841.padmap.service.PadMapAccessibilityService
 import com.slickstax841.padmap.ui.theme.*
@@ -57,6 +61,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
     val ctx = LocalContext.current
     val appData by DataStore.data.collectAsState()
     val skin = LocalAppSkin.current
+    val scope = rememberCoroutineScope()
 
     var hasOverlay by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
     var hasA11y by remember { mutableStateOf(isA11yEnabled(ctx)) }
@@ -151,6 +156,14 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 OverlayManager.instance?.repositionForHome()
                 scanAndSaveController()
                 GameScanner.scan(ctx)
+                if (!hasInjector) {
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            runCatching { SidecarHost.ensureRunning(ctx) }.getOrDefault(false)
+                        }
+                        hasInjector = ok || SidecarClient.isAvailable
+                    }
+                }
             }
         }
         lifecycle.addObserver(observer)
@@ -215,8 +228,14 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     SectionLabel("INJECTOR")
                     Spacer(Modifier.height(6.dp))
                     PermCard(
-                        label = "Wireless debugging injector",
-                        instructions = "Settings \u2192 pair a 6-digit wireless debugging code. PadMap starts its own injector. Overlay mapping will not reach games until this is running."
+                        label = if (SidecarHost.hasPaired(ctx))
+                            "Turn on Wireless debugging"
+                        else
+                            "One-time injector pair",
+                        instructions = if (SidecarHost.hasPaired(ctx))
+                            "Developer options \u2192 Wireless debugging ON, then return here. PadMap starts the injector itself. No code."
+                        else
+                            "First time only: Settings \u2192 PAIR ONCE with the 6-digit code from Wireless debugging \u2192 Pair device with pairing code."
                     ) { onSettings() }
                     Spacer(Modifier.height(8.dp))
                 }

@@ -82,9 +82,16 @@ private fun InjectorCard(skin: AppSkin) {
     var connectPort by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(SidecarClient.isAvailable) }
+    var paired by remember { mutableStateOf(SidecarHost.hasPaired(ctx)) }
 
     val dotColor = if (running) Color(0xFF00DD66) else Color(0xFFFF8800)
     val statusText = if (running) "Injector running" else SidecarHost.status
+
+    fun openDeveloper() {
+        ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
+    }
 
     Column(
         modifier = Modifier
@@ -107,78 +114,105 @@ private fun InjectorCard(skin: AppSkin) {
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            "Enable Wireless debugging, open Pair with pairing code, then enter the 6-digit code. PadMap starts its own injector — no Shizuku.",
+            if (paired)
+                "Already paired. Turn on Wireless debugging (Developer options) and tap START. No code after the first time."
+            else
+                "One-time setup: Developer options \u2192 Wireless debugging ON \u2192 Pair device with pairing code \u2192 type the 6 digits here.",
             fontSize = 12.sp, color = skin.textSecondary, fontFamily = skin.labelFont
         )
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(
-            value = code,
-            onValueChange = { if (it.length <= 6) code = it.filter { ch -> ch.isDigit() } },
-            label = { Text("Pairing code") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!paired) {
+            Spacer(Modifier.height(10.dp))
             OutlinedTextField(
-                value = pairPort,
-                onValueChange = { pairPort = it.filter { ch -> ch.isDigit() } },
-                label = { Text("Pair port (auto if blank)") },
+                value = code,
+                onValueChange = { if (it.length <= 6) code = it.filter { ch -> ch.isDigit() } },
+                label = { Text("6-digit pairing code") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth()
             )
-            OutlinedTextField(
-                value = connectPort,
-                onValueChange = { connectPort = it.filter { ch -> ch.isDigit() } },
-                label = { Text("Connect port (auto)") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.weight(1f)
-            )
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = pairPort,
+                    onValueChange = { pairPort = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("Pair port (auto)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = connectPort,
+                    onValueChange = { connectPort = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("Connect port (auto)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = {
-                ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
-            }) { Text("OPEN DEVELOPER", color = skin.accent, fontSize = 12.sp) }
-            TextButton(
-                enabled = !busy && code.length == 6,
-                onClick = {
-                    busy = true
-                    scope.launch {
-                        val result = withContext(Dispatchers.IO) {
-                            runCatching {
-                                if (!SidecarHost.isWirelessDebugOn(ctx)) {
-                                    error("Turn on Wireless debugging first")
-                                }
-                                val pairEp = if (pairPort.isNotBlank()) {
-                                    com.slickstax841.padmap.inject.AdbEndpoint("127.0.0.1", pairPort.toInt())
-                                } else {
-                                    NsdAdbFinder.find(ctx, pairing = true)
-                                        ?: error("Could not find pairing port. Enter it from the pairing dialog.")
-                                }
-                                SidecarHost.pair(ctx, pairEp.host, pairEp.port, code)
-                                val connEp = if (connectPort.isNotBlank()) {
-                                    com.slickstax841.padmap.inject.AdbEndpoint("127.0.0.1", connectPort.toInt())
-                                } else {
-                                    NsdAdbFinder.find(ctx, pairing = false)
-                                        ?: error("Could not find wireless debugging port.")
-                                }
-                                SidecarHost.start(ctx, connEp.host, connEp.port)
+            TextButton(onClick = { openDeveloper() }) {
+                Text("OPEN DEVELOPER", color = skin.accent, fontSize = 12.sp)
+            }
+            if (paired) {
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                runCatching { SidecarHost.ensureRunning(ctx) }
                             }
+                            busy = false
+                            running = SidecarClient.isAvailable
+                            result.exceptionOrNull()?.let {
+                                Toast.makeText(ctx, it.message ?: "Start failed", Toast.LENGTH_LONG).show()
+                            } ?: Toast.makeText(
+                                ctx,
+                                if (running) "Injector running" else SidecarHost.status,
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
-                        busy = false
-                        running = SidecarClient.isAvailable
-                        result.exceptionOrNull()?.let {
-                            Toast.makeText(ctx, it.message ?: "Pair failed", Toast.LENGTH_LONG).show()
-                        } ?: Toast.makeText(ctx, "Injector running", Toast.LENGTH_SHORT).show()
                     }
-                }
-            ) { Text(if (busy) "WORKING…" else "PAIR & START", color = skin.accent, fontSize = 12.sp) }
+                ) { Text(if (busy) "WORKING…" else "START", color = skin.accent, fontSize = 12.sp) }
+            } else {
+                TextButton(
+                    enabled = !busy && code.length == 6,
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    if (!SidecarHost.isWirelessDebugOn(ctx)) {
+                                        error("Turn on Wireless debugging first")
+                                    }
+                                    val pairEp = if (pairPort.isNotBlank()) {
+                                        com.slickstax841.padmap.inject.AdbEndpoint("127.0.0.1", pairPort.toInt())
+                                    } else {
+                                        NsdAdbFinder.find(ctx, pairing = true)
+                                            ?: error("Could not find pairing port. Type the port from the Android pair dialog.")
+                                    }
+                                    SidecarHost.pair(ctx, pairEp.host, pairEp.port, code)
+                                    val connEp = if (connectPort.isNotBlank()) {
+                                        com.slickstax841.padmap.inject.AdbEndpoint("127.0.0.1", connectPort.toInt())
+                                    } else {
+                                        NsdAdbFinder.find(ctx, pairing = false)
+                                            ?: error("Could not find wireless debugging port.")
+                                    }
+                                    SidecarHost.start(ctx, connEp.host, connEp.port)
+                                }
+                            }
+                            busy = false
+                            running = SidecarClient.isAvailable
+                            paired = SidecarHost.hasPaired(ctx)
+                            result.exceptionOrNull()?.let {
+                                Toast.makeText(ctx, it.message ?: "Pair failed", Toast.LENGTH_LONG).show()
+                            } ?: Toast.makeText(ctx, "Injector running — you will not need the code again", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                ) { Text(if (busy) "WORKING…" else "PAIR ONCE", color = skin.accent, fontSize = 12.sp) }
+            }
         }
     }
 }

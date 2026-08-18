@@ -10,6 +10,9 @@ import java.nio.charset.Charset
  */
 object SidecarHost {
 
+    private const val PREFS = "padmap_sidecar"
+    private const val KEY_PAIRED = "paired"
+
     @Volatile
     var status: String = "Injector not started"
         private set
@@ -18,12 +21,44 @@ object SidecarHost {
         return Settings.Global.getInt(context.contentResolver, "adb_wifi_enabled", 0) > 0
     }
 
+    fun hasPaired(context: Context): Boolean {
+        return context.getSharedPreferences(PREFS, 0).getBoolean(KEY_PAIRED, false)
+    }
+
+    private fun markPaired(context: Context) {
+        context.getSharedPreferences(PREFS, 0).edit().putBoolean(KEY_PAIRED, true).apply()
+    }
+
+    /**
+     * After the first pairing, just flip Wireless debugging on and this
+     * reconnects and starts the sidecar. No 6-digit code.
+     */
+    fun ensureRunning(context: Context): Boolean {
+        if (SidecarClient.ping()) {
+            status = "Injector running"
+            return true
+        }
+        if (!isWirelessDebugOn(context)) {
+            status = if (hasPaired(context)) "Turn on Wireless debugging" else "First-time pair needed"
+            return false
+        }
+        if (!hasPaired(context)) {
+            status = "First-time pair needed"
+            return false
+        }
+        val ep = NsdAdbFinder.find(context, pairing = false)
+            ?: throw IllegalStateException("Wireless debugging is on but the port was not found. Open PadMap Settings.")
+        start(context, ep.host, ep.port)
+        return SidecarClient.ping()
+    }
+
     fun pair(context: Context, host: String, port: Int, code: String) {
         status = "Pairing…"
         val mgr = PadMapAdbManager.get(context)
         if (!mgr.pair(host, port, code)) {
             throw IllegalStateException("Pairing rejected. Check the code and wireless debugging port.")
         }
+        markPaired(context)
         status = "Paired"
     }
 
