@@ -83,7 +83,6 @@ private fun InjectorCard(skin: AppSkin) {
     var busy by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(SidecarClient.isAvailable) }
     var paired by remember { mutableStateOf(SidecarHost.hasPaired(ctx)) }
-    val hasSu = SidecarHost.hasSu()
 
     val dotColor = if (running) Color(0xFF00DD66) else Color(0xFFFF8800)
     val statusText = if (running) "Injector running" else SidecarHost.status
@@ -116,17 +115,13 @@ private fun InjectorCard(skin: AppSkin) {
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            when {
-                hasSu ->
-                    "PadMap starts the injector with Magisk. Tap START, then Allow. No Wi-Fi."
-                paired ->
-                    "Already paired. Turn on Wireless debugging (Developer options) and tap START. No code after the first time."
-                else ->
-                    "OPEN DEVELOPER puts a bar at the top. Open Pair with pairing code and stay there. Tap the bar fields — keyboard comes from the bottom. Submit."
-            },
+            if (paired)
+                "Already paired. Turn on Wireless debugging (Developer options) and tap START. No code after the first time."
+            else
+                "OPEN DEVELOPER puts a bar at the top. Open Pair with pairing code and stay there. Tap the bar fields — keyboard comes from the bottom. Submit.",
             fontSize = 12.sp, color = skin.textSecondary, fontFamily = skin.labelFont
         )
-        if (!hasSu && !paired) {
+        if (!paired) {
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(
                 value = code,
@@ -148,17 +143,15 @@ private fun InjectorCard(skin: AppSkin) {
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!hasSu && !paired) {
+            if (!paired) {
                 TextButton(onClick = { PairOverlay.show(ctx) }) {
                     Text("SHOW PAIR PAD", color = skin.accent, fontSize = 12.sp)
                 }
             }
-            if (!hasSu) {
-                TextButton(onClick = { openDeveloper() }) {
-                    Text("OPEN DEVELOPER", color = skin.accent, fontSize = 12.sp)
-                }
+            TextButton(onClick = { openDeveloper() }) {
+                Text("OPEN DEVELOPER", color = skin.accent, fontSize = 12.sp)
             }
-            if (hasSu || paired) {
+            if (paired) {
                 TextButton(
                     enabled = !busy,
                     onClick = {

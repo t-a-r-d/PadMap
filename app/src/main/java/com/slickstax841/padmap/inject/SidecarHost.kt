@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Copies the sidecar jar to /data/local/tmp and starts it as shell (uid 2000).
- * Prefers Magisk `su`. Wireless ADB is only used when no su binary is present.
+ * The visible path is wireless ADB pairing. Magisk `su` is a hidden fallback.
  */
 object SidecarHost {
 
@@ -94,9 +94,9 @@ object SidecarHost {
     }
 
     /**
-     * Starts the sidecar via Magisk when `su` exists. Otherwise reconnects wireless ADB
-     * after the first pairing. Does not require the AOSP adb_wifi_enabled flag —
-     * Oppo often leaves that at 0.
+     * Reconnects wireless ADB after the first pairing and starts the sidecar.
+     * Magisk `su` is only a hidden fallback if wireless start fails.
+     * Does not require the AOSP adb_wifi_enabled flag — Oppo often leaves that at 0.
      */
     fun ensureRunning(context: Context, force: Boolean = false): Boolean {
         bindClient(context)
@@ -106,19 +106,6 @@ object SidecarHost {
             return true
         }
         if (inProgress) return false
-        val su = suPath()
-        val now = System.currentTimeMillis()
-        if (su != null) {
-            if (!force && now - lastAttemptMs < 3000L) return false
-            lastAttemptMs = now
-            inProgress = true
-            try {
-                return startViaRoot(context, su)
-            } finally {
-                inProgress = false
-                lastAttemptMs = System.currentTimeMillis()
-            }
-        }
         if (!hasPaired(context)) {
             status = "First-time pair needed"
             return false
@@ -126,6 +113,7 @@ object SidecarHost {
         // ColorOS's "Wireless debugging connected" toast resumes Home, which used
         // to call this again and disconnect/reconnect forever.
         if (!force && autoTriedThisProcess) return false
+        val now = System.currentTimeMillis()
         if (!force && now - lastAttemptMs < 20_000L) {
             return false
         }
@@ -138,7 +126,7 @@ object SidecarHost {
             val flagOn = isWirelessDebugOn(context)
             if (nsd == null && last == null && !flagOn) {
                 status = "Turn on Wireless debugging, then return here"
-                return false
+                return tryHiddenRoot(context)
             }
             val tried = linkedSetOf<AdbEndpoint>()
             nsd?.let {
@@ -151,7 +139,7 @@ object SidecarHost {
             }
             if (tried.isEmpty()) {
                 status = "Wireless debugging looks on, but no connect port was found"
-                return false
+                return tryHiddenRoot(context)
             }
             autoTriedThisProcess = true
             var lastErr: Throwable? = null
@@ -165,12 +153,22 @@ object SidecarHost {
                     lastErr = t
                 }
             }
+            if (tryHiddenRoot(context)) return true
             status = lastErr?.message ?: "Could not start injector"
             throw lastErr ?: IllegalStateException(status)
         } finally {
             inProgress = false
             lastAttemptMs = System.currentTimeMillis()
         }
+    }
+
+    /** Magisk start with no UI. Keeps the wireless status if root is missing or denied. */
+    private fun tryHiddenRoot(context: Context): Boolean {
+        val su = suPath() ?: return false
+        val saved = status
+        val ok = runCatching { startViaRoot(context, su) }.getOrDefault(false)
+        if (!ok) status = saved
+        return ok
     }
 
     fun pair(context: Context, host: String, port: Int, code: String) {

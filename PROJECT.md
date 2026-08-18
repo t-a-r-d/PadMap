@@ -20,10 +20,9 @@ AccessibilityService and `TYPE_APPLICATION_OVERLAY`.
 
 A filter that works for buttons can silently break axes. Enumerate both paths before changing routing.
 
-Playback is a shell sidecar (`sidecar/SidecarMain.java`). Magisk `su` copies and
-starts it as uid 2000 (shell) when `su` exists. Wireless ADB pairing is only used
-when there is no `su` binary. The app never calls `injectInputEvent`. Overlay is
-placement only.
+Playback is a shell sidecar (`sidecar/SidecarMain.java`) started after in-app wireless
+ADB pairing. Magisk `su` is a hidden fallback (same sidecar as uid 2000) if wireless
+start fails. The app never calls `injectInputEvent`. Overlay is placement only.
 Move stick is absolute (`centre + axis * radius`). Look stick is relative
 (`+= axis * speed`, reset at edge). Buttons are pointer down/up on that sidecar.
 
