@@ -216,6 +216,32 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 Spacer(Modifier.height(4.dp))
             }
 
+            item {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(skin.surfaceCol)
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(if (hasInjector) Color(0xFF00DD66) else Color(0xFFFF8800))
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        if (hasInjector) "Injector running" else "Injector not running",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = skin.textPrimary,
+                        fontFamily = skin.labelFont
+                    )
+                }
+            }
+
             // Always show overlay restore button once permissions are granted —
             // the config icon can disappear from the game screen and this is the only way back
             if (hasOverlay && hasA11y) {
