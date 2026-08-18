@@ -117,7 +117,7 @@ private fun InjectorCard(skin: AppSkin) {
             if (paired)
                 "Already paired. Turn on Wireless debugging (Developer options) and tap START. No code after the first time."
             else
-                "One-time setup: Developer options \u2192 Wireless debugging ON \u2192 Pair device with pairing code \u2192 type the 6 digits here.",
+                "One-time setup: Developer options \u2192 Wireless debugging ON \u2192 Pair device with pairing code \u2192 type the 6 digits and paste the IP:port line (the one with dots).",
             fontSize = 12.sp, color = skin.textSecondary, fontFamily = skin.labelFont
         )
         if (!paired) {
@@ -134,18 +134,18 @@ private fun InjectorCard(skin: AppSkin) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = pairPort,
-                    onValueChange = { pairPort = it.filter { ch -> ch.isDigit() } },
-                    label = { Text("Pair port (auto)") },
+                    onValueChange = { pairPort = it.filter { ch -> ch.isDigit() || ch == '.' || ch == ':' } },
+                    label = { Text("Paste IP:port from pair dialog") },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     modifier = Modifier.weight(1f)
                 )
                 OutlinedTextField(
                     value = connectPort,
-                    onValueChange = { connectPort = it.filter { ch -> ch.isDigit() } },
-                    label = { Text("Connect port (auto)") },
+                    onValueChange = { connectPort = it.filter { ch -> ch.isDigit() || ch == '.' || ch == ':' } },
+                    label = { Text("Connect IP:port (auto)") },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -188,14 +188,16 @@ private fun InjectorCard(skin: AppSkin) {
                                         error("Turn on Wireless debugging first")
                                     }
                                     val pairEp = if (pairPort.isNotBlank()) {
-                                        com.slickstax841.padmap.inject.AdbEndpoint("127.0.0.1", pairPort.toInt())
+                                        com.slickstax841.padmap.inject.AdbEndpoint.parse(pairPort)
+                                            ?: error("Pair address should look like 192.168.0.12:37123")
                                     } else {
                                         NsdAdbFinder.find(ctx, pairing = true)
-                                            ?: error("Could not find pairing port. Type the port from the Android pair dialog.")
+                                            ?: error("Could not find pairing port. Paste IP:port from the Android pair dialog.")
                                     }
                                     SidecarHost.pair(ctx, pairEp.host, pairEp.port, code)
                                     val connEp = if (connectPort.isNotBlank()) {
-                                        com.slickstax841.padmap.inject.AdbEndpoint("127.0.0.1", connectPort.toInt())
+                                        com.slickstax841.padmap.inject.AdbEndpoint.parse(connectPort)
+                                            ?: error("Connect address should look like 192.168.0.12:5555")
                                     } else {
                                         NsdAdbFinder.find(ctx, pairing = false)
                                             ?: error("Could not find wireless debugging port.")

@@ -7,7 +7,25 @@ import java.net.Inet4Address
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-data class AdbEndpoint(val host: String, val port: Int)
+data class AdbEndpoint(val host: String, val port: Int) {
+    companion object {
+        /** Accepts "37123" or Android's "192.168.0.12:37123". */
+        fun parse(raw: String, defaultHost: String = "127.0.0.1"): AdbEndpoint? {
+            val s = raw.trim()
+            if (s.isEmpty()) return null
+            val colon = s.lastIndexOf(':')
+            if (colon > 0) {
+                val host = s.substring(0, colon).trim().ifBlank { defaultHost }
+                val port = s.substring(colon + 1).trim().toIntOrNull() ?: return null
+                if (port !in 1..65535) return null
+                return AdbEndpoint(host, port)
+            }
+            val port = s.toIntOrNull() ?: return null
+            if (port !in 1..65535) return null
+            return AdbEndpoint(defaultHost, port)
+        }
+    }
+}
 
 object NsdAdbFinder {
 
