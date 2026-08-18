@@ -228,14 +228,11 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     SectionLabel("INJECTOR")
                     Spacer(Modifier.height(6.dp))
                     PermCard(
-                        label = if (SidecarHost.hasPaired(ctx))
-                            "Turn on Wireless debugging"
+                        label = SidecarHost.status,
+                        instructions = if (!SidecarHost.hasPaired(ctx))
+                            "First time: Settings \u2192 OPEN DEVELOPER. Stay on Pair with pairing code and use the top bar."
                         else
-                            "One-time injector pair",
-                        instructions = if (SidecarHost.hasPaired(ctx))
-                            "Developer options \u2192 Wireless debugging ON, then return here. PadMap starts the injector itself. No code."
-                        else
-                            "First time only: Settings \u2192 OPEN DEVELOPER. A bar stays at the top. Open Pair with pairing code, type into that bar, Submit."
+                            "PadMap already paired. If Wireless debugging is on and this still shows, tap here — Oppo often hides the AOSP flag. Settings shows the real error."
                     ) { onSettings() }
                     Spacer(Modifier.height(8.dp))
                 }
