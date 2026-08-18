@@ -223,19 +223,30 @@ class PadMapAccessibilityService : AccessibilityService() {
                         updateInputInterception()
                     }
                 } else if (isGameOrUnknownApp(pkg)) {
-                    val appName = try {
-                        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
-                    } catch (_: Exception) { pkg }
-                    val id = java.util.UUID.randomUUID().toString()
-                    DataStore.update { it.copy(
-                        gameLayouts = it.gameLayouts + GameLayout(
-                            id = id, name = appName, packageName = pkg,
-                            controllerPresetId = it.activePresetId
-                        ),
-                        activeLayoutId = id
-                    )}
+                    val current = DataStore.activeLayout
+                    if (current != null && current.mappings.isNotEmpty()) {
+                        if (current.packageName.isBlank()) {
+                            DataStore.update { data ->
+                                data.copy(gameLayouts = data.gameLayouts.map {
+                                    if (it.id == current.id) it.copy(packageName = pkg) else it
+                                })
+                            }
+                        }
+                    } else {
+                        val appName = try {
+                            packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+                        } catch (_: Exception) { pkg }
+                        val id = java.util.UUID.randomUUID().toString()
+                        DataStore.update { it.copy(
+                            gameLayouts = it.gameLayouts + GameLayout(
+                                id = id, name = appName, packageName = pkg,
+                                controllerPresetId = it.activePresetId
+                            ),
+                            activeLayoutId = id
+                        )}
+                        OverlayManager.instance?.showToast("Layout created: $appName")
+                    }
                     updateInputInterception()
-                    OverlayManager.instance?.showToast("Layout created: $appName")
                 }
             }
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
@@ -253,18 +264,12 @@ class PadMapAccessibilityService : AccessibilityService() {
     @SuppressLint("NewApi")
     internal fun updateInputInterception() {
         val info = serviceInfo ?: return
-        val inConfig = OverlayManager.instance?.state == OverlayManager.State.CONFIG
-        val layout = DataStore.activeLayout
-        val needsKeyFilter = inConfig ||
-            layout?.mappings?.any { it.action is TouchAction.Tap } == true
         val flagKey = android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
-        val newFlags = if (needsKeyFilter) info.flags or flagKey else info.flags and flagKey.inv()
+        val newFlags = info.flags or flagKey
         var changed = info.flags != newFlags
         info.flags = newFlags
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val needsJoystick = inConfig ||
-                layout?.mappings?.any { it.action is TouchAction.Drag } == true
-            val newSources = if (needsJoystick) InputDevice.SOURCE_JOYSTICK or InputDevice.SOURCE_GAMEPAD else 0
+            val newSources = InputDevice.SOURCE_JOYSTICK or InputDevice.SOURCE_GAMEPAD
             if (info.motionEventSources != newSources) {
                 info.motionEventSources = newSources
                 changed = true

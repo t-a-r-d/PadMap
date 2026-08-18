@@ -70,6 +70,30 @@ Home `ON_RESUME` forces the icon visible. ColorOS often does not fire a launcher
 
 - Device confirmation on A40 after the next APK.
 
+---
+
+## BUG-004 — Injector running, sticks/buttons do nothing in game (v62)
+
+**Status:** in progress
+**Reported:** 2026-08-18 on Oppo A40, PadMap v62
+
+Sidecar stays up (`Injector running`) but gamepad sticks and buttons do not touch the game.
+
+### Cause
+
+Not confirmed on device. Code paths that drop playback:
+
+- Key filter and joystick `motionEventSources` are only enabled if the **active** layout already has Tap / Drag mappings. Opening a game with no matching `packageName` creates a **new empty** layout and makes it active, so both flags go off and a11y never sees the pad.
+- `InputManagerGlobal.injectInputEvent` resolved in check; inject may still be dropped (shell should use `IInputManager`).
+
+### Attempts
+
+- [in progress] Always request key filter + joystick/gamepad motion. If the active layout already has mappings, bind it to the game instead of replacing it with an empty one. Prefer `IInputManager` for inject. Clear `padMapUiVisible` on activity stop.
+
+### Not tried
+
+- Device confirmation after the next APK.
+
 ## How to use this file
 
 When a bug is reported:

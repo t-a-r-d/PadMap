@@ -195,9 +195,9 @@ public final class SidecarMain {
         boolean init() {
             exemptHiddenApis();
             StringBuilder fail = new StringBuilder();
-            if (tryGetInstance("android.hardware.input.InputManager", fail)
+            if (tryServiceManager(fail)
                     || tryGetInstance("android.hardware.input.InputManagerGlobal", fail)
-                    || tryServiceManager(fail)) {
+                    || tryGetInstance("android.hardware.input.InputManager", fail)) {
                 try {
                     setDisplayId = MotionEvent.class.getMethod("setDisplayId", int.class);
                 } catch (Throwable ignored) {
@@ -266,21 +266,17 @@ public final class SidecarMain {
 
         private boolean bindInject(Object inst, String via) {
             if (inst == null) return false;
-            Class<?> c = inst.getClass();
-            while (c != null) {
-                Method[] methods = c.getDeclaredMethods();
-                for (int i = 0; i < methods.length; i++) {
-                    if (!"injectInputEvent".equals(methods[i].getName())) continue;
-                    Class<?>[] p = methods[i].getParameterTypes();
-                    if (p.length < 2 || p.length > 3) continue;
-                    if (!InputEvent.class.isAssignableFrom(p[0])) continue;
-                    methods[i].setAccessible(true);
-                    injectMethod = methods[i];
-                    inputManager = inst;
-                    System.out.println("padmap-sidecar: inject via " + via + " " + methods[i]);
-                    return true;
-                }
-                c = c.getSuperclass();
+            Method[] methods = inst.getClass().getMethods();
+            for (int i = 0; i < methods.length; i++) {
+                if (!"injectInputEvent".equals(methods[i].getName())) continue;
+                Class<?>[] p = methods[i].getParameterTypes();
+                if (p.length < 2 || p.length > 3) continue;
+                if (!InputEvent.class.isAssignableFrom(p[0])) continue;
+                methods[i].setAccessible(true);
+                injectMethod = methods[i];
+                inputManager = inst;
+                System.out.println("padmap-sidecar: inject via " + via + " " + methods[i]);
+                return true;
             }
             return false;
         }

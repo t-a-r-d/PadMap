@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        PadMapAccessibilityService.instance?.padMapUiVisible = false
         if (!isChangingConfigurations) {
             OverlayManager.instance?.hideIconOnAppBackground()
         }
