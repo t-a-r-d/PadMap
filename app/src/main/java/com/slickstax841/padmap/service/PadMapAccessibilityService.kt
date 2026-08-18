@@ -96,6 +96,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         if (now - lastSidecarWarnMs > 2500L) {
             lastSidecarWarnMs = now
             val why = SidecarClient.lastError.ifBlank { "not paired" }
+            PlaybackDebug.log("sidecar off ($why)")
             OverlayManager.instance?.showToast("Injector off ($why) — Settings → OPEN DEVELOPER")
         }
         return false
@@ -167,7 +168,11 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     fun handlePlaybackMotion(event: MotionEvent) {
-        val layout = DataStore.activeLayout ?: return
+        val layout = DataStore.activeLayout
+        if (layout == null) {
+            PlaybackDebug.logMotion("motion no layout")
+            return
+        }
         val preset = DataStore.data.value.controllerPresets.find { it.id == layout.controllerPresetId }
 
         processHatAxis(event, layout, MotionEvent.AXIS_HAT_X, "D-Left", "D-Right")
@@ -192,6 +197,8 @@ class PadMapAccessibilityService : AccessibilityService() {
             if (mag < 0.01f) {
                 // release handled in tick
             } else if (activeSticks[stickLabel] == null) {
+                if (entries.none { it.action is TouchAction.Drag })
+                    PlaybackDebug.logMotion("stick $stickLabel not mapped as drag")
                 entries.forEach { entry ->
                     val drag = entry.action as? TouchAction.Drag ?: return@forEach
                     startStick(stickLabel, drag)
@@ -298,14 +305,33 @@ class PadMapAccessibilityService : AccessibilityService() {
             overlay.assignPendingZone(labelFor(event.keyCode) ?: keyCodeLabel(event.keyCode), false)
             return true
         }
-        if (overlay?.state == OverlayManager.State.CONFIG) return true
+        if (overlay?.state == OverlayManager.State.CONFIG) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
+                PlaybackDebug.log("key swallowed CONFIG")
+            return true
+        }
         if (padMapUiVisible) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
+                PlaybackDebug.log("key skipped PadMap UI")
             ControllerEventBus.emitKey(event)
             return false
         }
-        val label = labelFor(event.keyCode) ?: return false
-        val layout = DataStore.activeLayout ?: return false
-        if (layout.mappings.none { it.inputName == label }) return false
+        val label = labelFor(event.keyCode)
+        if (label == null) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
+                PlaybackDebug.log("key ${event.keyCode} no label")
+            return false
+        }
+        val layout = DataStore.activeLayout
+        if (layout == null) {
+            if (event.action == KeyEvent.ACTION_DOWN) PlaybackDebug.log("key $label no layout")
+            return false
+        }
+        if (layout.mappings.none { it.inputName == label }) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
+                PlaybackDebug.log("key $label not mapped")
+            return false
+        }
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
                 if (event.repeatCount > 0) return true
@@ -326,6 +352,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         val isGamepad = event.source and InputDevice.SOURCE_GAMEPAD != 0
         if (!isJoystick && !isGamepad) return
         if (padMapUiVisible) {
+            PlaybackDebug.logMotion("motion skipped PadMap UI")
             listOf(
                 MotionEvent.AXIS_X, MotionEvent.AXIS_Y,
                 MotionEvent.AXIS_Z, MotionEvent.AXIS_RZ,
@@ -358,14 +385,22 @@ class PadMapAccessibilityService : AccessibilityService() {
             }
             return
         }
-        if (overlay?.state == OverlayManager.State.CONFIG) return
+        if (overlay?.state == OverlayManager.State.CONFIG) {
+            PlaybackDebug.logMotion("motion swallowed CONFIG")
+            return
+        }
         handlePlaybackMotion(event)
     }
 
     private fun onButtonDown(label: String) {
         val layout = DataStore.activeLayout ?: return
         val entries = layout.mappings.filter { it.inputName == label }
-        if (entries.isEmpty() || !sidecarReady()) return
+        if (entries.isEmpty()) {
+            PlaybackDebug.log("btn $label no zones")
+            return
+        }
+        if (!sidecarReady()) return
+        PlaybackDebug.log("btn down $label")
         val nonTurbo = entries.filter { !it.turbo }
         val turboEntries = entries.filter { it.turbo }
         val mode = nonTurbo.firstOrNull()?.let { ButtonTuningStore.get(it.zoneId).mode } ?: ButtonMode.HOLD
@@ -426,7 +461,8 @@ class PadMapAccessibilityService : AccessibilityService() {
         activeHolds[label] = HoldState(entries, pids)
         entries.forEachIndexed { i, entry ->
             val (x, y) = tapXY(entry)
-            SidecarClient.pointerDown(pids[i], x, y)
+            val ok = SidecarClient.pointerDown(pids[i], x, y)
+            PlaybackDebug.log("down $label pid=${pids[i]} ${x.toInt()},${y.toInt()} ok=$ok ${SidecarClient.lastError}")
         }
     }
 
@@ -463,7 +499,8 @@ class PadMapAccessibilityService : AccessibilityService() {
         if (activeSticks.containsKey(label) || !sidecarReady()) return
         val pid = allocPointer()
         activeSticks[label] = StickState(drag, drag.centerX, drag.centerY, drag.lookMode, pid)
-        SidecarClient.pointerDown(pid, drag.centerX, drag.centerY)
+        val ok = SidecarClient.pointerDown(pid, drag.centerX, drag.centerY)
+        PlaybackDebug.log("stick $label down pid=$pid ${drag.centerX.toInt()},${drag.centerY.toInt()} ok=$ok ${SidecarClient.lastError}")
         ensureStickLoop()
     }
 

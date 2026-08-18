@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.*
 import android.graphics.drawable.GradientDrawable
+import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -117,6 +118,16 @@ class OverlayManager(private val context: Context) {
     private val debugParams = mutableMapOf<String, WindowManager.LayoutParams>()
     // Retained so showContextMenu() can re-request focus after adding clickable views
     private var keyCatcher: KeyCatcherView? = null
+    private var debugLogView: TextView? = null
+    private var debugBox: View? = null
+    private var debugOpen = false
+    private val debugRefresh = object : Runnable {
+        override fun run() {
+            if (!debugOpen) return
+            debugLogView?.text = PlaybackDebug.snapshot()
+            handler.postDelayed(this, 400)
+        }
+    }
 
     // ─── Public API ───────────────────────────────────────────────────────────
 
@@ -654,6 +665,15 @@ class OverlayManager(private val context: Context) {
             setOnClickListener { enterAdjustMode() }
             layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
         })
+        btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(dp(6), 1) })
+        btnRow.addView(TextView(context).apply {
+            text = "DEBUG"
+            textSize = 11f
+            setTextColor(Color.parseColor("#00BFFF"))
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            background = outlineDrawable(Color.parseColor("#00BFFF"))
+            setOnClickListener { toggleDebugBox() }
+        })
         btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
         // CLEAR
         btnRow.addView(TextView(context).apply {
@@ -679,7 +699,55 @@ class OverlayManager(private val context: Context) {
         })
 
         panel.addView(btnRow)
+        panel.addView(buildDebugBox())
         return panel
+    }
+
+    private fun buildDebugBox(): View {
+        val box = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(0, dp(8), 0, 0)
+        }
+        box.addView(TextView(context).apply {
+            text = "SHARE"
+            textSize = 11f
+            setTextColor(Color.parseColor("#00BFFF"))
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            background = outlineDrawable(Color.parseColor("#00BFFF"))
+            setOnClickListener { sharePlaybackDebug() }
+        })
+        val log = TextView(context).apply {
+            textSize = 9f
+            setTextColor(Color.parseColor("#DDDDDD"))
+            typeface = android.graphics.Typeface.MONOSPACE
+            setPadding(0, dp(6), 0, 0)
+            maxHeight = dp(180)
+        }
+        debugLogView = log
+        box.addView(log)
+        debugBox = box
+        return box
+    }
+
+    private fun toggleDebugBox() {
+        debugOpen = !debugOpen
+        debugBox?.visibility = if (debugOpen) View.VISIBLE else View.GONE
+        handler.removeCallbacks(debugRefresh)
+        if (debugOpen) {
+            debugLogView?.text = PlaybackDebug.snapshot()
+            handler.post(debugRefresh)
+        }
+    }
+
+    private fun sharePlaybackDebug() {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "PadMap playback debug")
+            putExtra(Intent.EXTRA_TEXT, PlaybackDebug.snapshot())
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(Intent.createChooser(send, "Share playback debug").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     // ─── Zone management ──────────────────────────────────────────────────────
@@ -1040,9 +1108,12 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun removeConfig() {
+        debugOpen = false
+        handler.removeCallbacks(debugRefresh)
         configRoot?.let { runCatching { wm.removeView(it) } }
         configRoot = null; zoneLayer = null; zoneViews.clear(); contextMenuViews.clear()
         keyCatcher = null; adjustLayer = null; adjustMode = false; configPanel = null
+        debugLogView = null; debugBox = null
     }
 
     // ─── Context menu (tap on assigned zone) ─────────────────────────────────
