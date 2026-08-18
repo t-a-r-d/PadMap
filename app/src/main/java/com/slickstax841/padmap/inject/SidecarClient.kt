@@ -4,10 +4,16 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.InetAddress
 import java.net.Socket
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * App-side socket to the shell sidecar. Never calls injectInputEvent itself.
+ * All TCP runs on [io] — playback arrives on the main thread and Android
+ * throws NetworkOnMainThreadException if we connect/write there (BUG-004 v65).
  */
 object SidecarClient {
 
@@ -33,67 +39,107 @@ object SidecarClient {
     private var input: DataInputStream? = null
     private var output: DataOutputStream? = null
     private val connected = AtomicBoolean(false)
+    private val ioThread = AtomicReference<Thread?>(null)
+    private val io = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "padmap-sidecar").apply {
+            isDaemon = true
+            ioThread.set(this)
+        }
+    }
 
     val isAvailable: Boolean
         get() = connected.get()
 
-    fun ping(): Boolean = synchronized(lock) {
-        if (!ensureConnectedLocked()) return false
-        return writeAndAckLocked {
-            output!!.writeByte(CMD_PING.toInt())
+    fun ping(): Boolean = onIo {
+        synchronized(lock) {
+            if (!ensureConnectedLocked()) false
+            else writeAndAckLocked { output!!.writeByte(CMD_PING.toInt()) }
         }
     }
 
-    fun pointerDown(id: Int, x: Float, y: Float): Boolean = synchronized(lock) {
-        if (!ensureConnectedLocked()) return false
-        return writeAndAckLocked {
-            output!!.writeByte(CMD_DOWN.toInt())
-            output!!.writeByte(id)
-            output!!.writeFloat(x)
-            output!!.writeFloat(y)
-        }
-    }
-
-    fun pointerMove(id: Int, x: Float, y: Float): Boolean = synchronized(lock) {
-        if (!ensureConnectedLocked()) return false
-        return writeAndAckLocked {
-            output!!.writeByte(CMD_MOVE.toInt())
-            output!!.writeByte(id)
-            output!!.writeFloat(x)
-            output!!.writeFloat(y)
-        }
-    }
-
-    fun batchUpdate(updates: Map<Int, Pair<Float, Float>>): Boolean = synchronized(lock) {
-        if (!ensureConnectedLocked() || updates.isEmpty()) return false
-        return writeAndAckLocked {
-            output!!.writeByte(CMD_BATCH.toInt())
-            output!!.writeByte(updates.size)
-            for ((id, pos) in updates) {
+    fun pointerDown(id: Int, x: Float, y: Float): Boolean = onIo {
+        synchronized(lock) {
+            if (!ensureConnectedLocked()) false
+            else writeAndAckLocked {
+                output!!.writeByte(CMD_DOWN.toInt())
                 output!!.writeByte(id)
-                output!!.writeFloat(pos.first)
-                output!!.writeFloat(pos.second)
+                output!!.writeFloat(x)
+                output!!.writeFloat(y)
             }
         }
     }
 
-    fun pointerUp(id: Int): Boolean = synchronized(lock) {
-        if (!ensureConnectedLocked()) return false
-        return writeAndAckLocked {
-            output!!.writeByte(CMD_UP.toInt())
-            output!!.writeByte(id)
+    fun pointerMove(id: Int, x: Float, y: Float): Boolean = onIo {
+        synchronized(lock) {
+            if (!ensureConnectedLocked()) false
+            else writeAndAckLocked {
+                output!!.writeByte(CMD_MOVE.toInt())
+                output!!.writeByte(id)
+                output!!.writeFloat(x)
+                output!!.writeFloat(y)
+            }
+        }
+    }
+
+    fun batchUpdate(updates: Map<Int, Pair<Float, Float>>): Boolean = onIo {
+        synchronized(lock) {
+            if (!ensureConnectedLocked() || updates.isEmpty()) false
+            else writeAndAckLocked {
+                output!!.writeByte(CMD_BATCH.toInt())
+                output!!.writeByte(updates.size)
+                for ((id, pos) in updates) {
+                    output!!.writeByte(id)
+                    output!!.writeFloat(pos.first)
+                    output!!.writeFloat(pos.second)
+                }
+            }
+        }
+    }
+
+    fun pointerUp(id: Int): Boolean = onIo {
+        synchronized(lock) {
+            if (!ensureConnectedLocked()) false
+            else writeAndAckLocked {
+                output!!.writeByte(CMD_UP.toInt())
+                output!!.writeByte(id)
+            }
         }
     }
 
     fun releaseAll() {
-        synchronized(lock) {
-            if (!ensureConnectedLocked()) return
-            writeAndAckLocked { output!!.writeByte(CMD_RELEASE.toInt()) }
+        onIo {
+            synchronized(lock) {
+                if (!ensureConnectedLocked()) false
+                else writeAndAckLocked { output!!.writeByte(CMD_RELEASE.toInt()) }
+            }
         }
     }
 
     fun disconnect() {
-        synchronized(lock) { closeLocked() }
+        onIo {
+            synchronized(lock) { closeLocked() }
+            true
+        }
+    }
+
+    private fun onIo(block: () -> Boolean): Boolean {
+        if (Thread.currentThread() === ioThread.get()) {
+            return try {
+                block()
+            } catch (t: Throwable) {
+                lastError = t.message ?: t.javaClass.simpleName
+                false
+            }
+        }
+        return try {
+            io.submit(Callable { block() }).get(3, TimeUnit.SECONDS)
+        } catch (t: Throwable) {
+            var c: Throwable = t
+            val seen = HashSet<Throwable>()
+            while (c.cause != null && seen.add(c)) c = c.cause!!
+            lastError = c.message ?: c.javaClass.simpleName
+            false
+        }
     }
 
     private fun ensureConnectedLocked(): Boolean {
