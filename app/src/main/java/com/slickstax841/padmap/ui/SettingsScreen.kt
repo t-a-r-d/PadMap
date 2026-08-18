@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.inject.NsdAdbFinder
+import com.slickstax841.padmap.inject.PairOverlay
 import com.slickstax841.padmap.inject.SidecarClient
 import com.slickstax841.padmap.inject.SidecarHost
 import com.slickstax841.padmap.ui.theme.*
@@ -116,7 +117,7 @@ private fun InjectorCard(skin: AppSkin) {
             if (paired)
                 "Already paired. Turn on Wireless debugging (Developer options) and tap START. No code after the first time."
             else
-                "Leave the pair popup open. A new popup makes a new code AND a new port. Type the 6 digits from that one screen. Paste IP:port only if auto-find fails.",
+                "Android closes the pair screen if you leave it. Tap SHOW PAIR PAD first, then open Pair with pairing code and type the 6 digits on the floating pad.",
             fontSize = 12.sp, color = skin.textSecondary, fontFamily = skin.labelFont
         )
         if (!paired) {
@@ -141,6 +142,11 @@ private fun InjectorCard(skin: AppSkin) {
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!paired) {
+                TextButton(onClick = { PairOverlay.show(ctx) }) {
+                    Text("SHOW PAIR PAD", color = skin.accent, fontSize = 12.sp)
+                }
+            }
             TextButton(onClick = { openDeveloper() }) {
                 Text("OPEN DEVELOPER", color = skin.accent, fontSize = 12.sp)
             }
