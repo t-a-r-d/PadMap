@@ -2,7 +2,8 @@ package com.slickstax841.padmap.inject
 
 import android.content.Context
 import android.provider.Settings
-import java.io.File
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.TimeUnit
 import java.nio.charset.Charset
 
 /**
@@ -109,16 +110,17 @@ object SidecarHost {
     fun start(context: Context, connectHost: String, connectPort: Int) {
         status = "Connecting ADB…"
         val mgr = PadMapAdbManager.get(context)
+        mgr.setTimeout(8, TimeUnit.SECONDS)
         if (!connectAny(mgr, connectHost, connectPort)) {
             throw IllegalStateException("ADB connect failed on $connectHost:$connectPort")
         }
         saveEndpoint(context, AdbEndpoint(connectHost, connectPort))
-        val jar = extractJar(context)
         val remote = "/data/local/tmp/padmap-sidecar.jar"
         status = "Installing injector…"
-        shell(mgr, "cp '${jar.absolutePath}' $remote")
+        // Do not cp from /storage/emulated/0 — ColorOS FUSE often never returns.
+        pushJar(mgr, readAssetJar(context), remote)
         shell(mgr, "chmod 644 $remote")
-        shell(mgr, "kill \$(cat /data/local/tmp/padmap-sidecar.pid) 2>/dev/null || true")
+        shell(mgr, "kill \$(cat /data/local/tmp/padmap-sidecar.pid) 2>/dev/null; true")
         status = "Starting injector…"
         val start = "CLASSPATH=$remote app_process64 /data/local/tmp " +
             "com.slickstax841.padmap.sidecar.SidecarMain ${SidecarClient.PORT} ${SidecarClient.TOKEN}"
@@ -142,18 +144,44 @@ object SidecarHost {
         return false
     }
 
-    private fun extractJar(context: Context): File {
-        val out = File(context.getExternalFilesDir(null), "padmap-sidecar.jar")
-        context.assets.open("sidecar/padmap-sidecar.jar").use { input ->
-            out.outputStream().use { output -> input.copyTo(output) }
+    private fun readAssetJar(context: Context): ByteArray {
+        return context.assets.open("sidecar/padmap-sidecar.jar").use { it.readBytes() }
+    }
+
+    private fun pushJar(mgr: PadMapAdbManager, bytes: ByteArray, remote: String) {
+        val stream = mgr.openStream("shell:dd of=$remote")
+        try {
+            stream.openOutputStream().use { out ->
+                out.write(bytes)
+                out.flush()
+            }
+        } finally {
+            runCatching { stream.close() }
         }
-        return out
     }
 
     private fun shell(mgr: PadMapAdbManager, command: String): String {
         val stream = mgr.openStream("shell:$command")
-        stream.openInputStream().use { input ->
-            return input.readBytes().toString(Charset.forName("UTF-8"))
+        return try {
+            val inp = stream.openInputStream()
+            val buf = ByteArray(4096)
+            val acc = ByteArrayOutputStream()
+            val deadline = System.currentTimeMillis() + 8000
+            while (System.currentTimeMillis() < deadline) {
+                val n = try {
+                    val avail = runCatching { inp.available() }.getOrDefault(1)
+                    if (avail <= 0) {
+                        Thread.sleep(40)
+                        continue
+                    }
+                    inp.read(buf)
+                } catch (_: Throwable) { -1 }
+                if (n < 0) break
+                if (n > 0) acc.write(buf, 0, n)
+            }
+            acc.toString(Charset.forName("UTF-8").name())
+        } finally {
+            runCatching { stream.close() }
         }
     }
 }
