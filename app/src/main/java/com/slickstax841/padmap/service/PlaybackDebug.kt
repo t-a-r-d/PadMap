@@ -38,7 +38,10 @@ object PlaybackDebug {
             appendLine(
                 "injector available=${SidecarClient.isAvailable} ping=${SidecarClient.ping()} err=${SidecarClient.lastError}"
             )
-            appendLine("uiVisible=${svc?.padMapUiVisible} fg=${svc?.foregroundPackage}")
+            appendLine(
+                "uiVisible=${svc?.padMapUiVisible} fg=${svc?.foregroundPackage} " +
+                    "holds=${svc?.activeHoldCount ?: 0} sticks=${svc?.activeStickCount ?: 0}"
+            )
             appendLine(
                 "layout=${layout?.name} maps=${layout?.mappings?.size ?: 0} " +
                     "named=${layout?.mappings?.count { it.inputName.isNotBlank() } ?: 0} pkg=${layout?.packageName}"

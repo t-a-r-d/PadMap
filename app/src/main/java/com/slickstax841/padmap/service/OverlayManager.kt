@@ -34,6 +34,16 @@ class OverlayManager(private val context: Context) {
             "com.google.android.gsf",
             "com.google.android.gms.ui"
         )
+        // Status bar / toasts / permission chips. Not a real app switch — do not
+        // tear down the play catcher or playback (v66 stuck-repeat / dead stick).
+        val TRANSIENT_PACKAGES = setOf(
+            "com.android.systemui",
+            "com.oplus.systemui",
+            "com.coloros.systemui",
+            "com.oppo.systemui",
+            "com.android.permissioncontroller",
+            "com.google.android.permissioncontroller"
+        ) + BLOCKED_PACKAGES
         private val KNOWN_LAUNCHERS = setOf(
             "com.oppo.launcher",
             "com.heytap.launcher",
@@ -76,15 +86,15 @@ class OverlayManager(private val context: Context) {
         PixelFormat.TRANSLUCENT
     ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; x = 0; y = -1 }
 
-    // Full-screen, not touchable: gamepad keys/sticks land here, finger touches go to the game.
+    // 1×1 focusable backup for pad keys if a11y drops them. Full-screen was
+    // sitting over every injected coordinate on ColorOS.
     private var playCatcher: View? = null
     private val playParams = WindowManager.LayoutParams(
-        WindowManager.LayoutParams.MATCH_PARENT,
-        WindowManager.LayoutParams.MATCH_PARENT,
+        1, 1,
         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
         PixelFormat.TRANSLUCENT
-    )
+    ).apply { gravity = Gravity.TOP or Gravity.START }
 
     // ─── Config overlay ───────────────────────────────────────────────────────
 
@@ -200,6 +210,7 @@ class OverlayManager(private val context: Context) {
                 keyCatcher?.requestFocus()
                 return@post
             }
+            if (pkg in TRANSIENT_PACKAGES) return@post
             val view = iconView ?: return@post
             if (!com.slickstax841.padmap.data.GameScanner.isInstalledGame(context, pkg)) {
                 view.visibility = View.GONE
@@ -1363,6 +1374,7 @@ class OverlayManager(private val context: Context) {
     private fun hidePlayCatcher() {
         playCatcher?.let { runCatching { wm.removeView(it) } }
         playCatcher = null
+        PadMapAccessibilityService.instance?.releaseAllPlayback()
     }
 
     private class PlaybackCatcherView(ctx: Context) : View(ctx) {

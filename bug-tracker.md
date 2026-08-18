@@ -89,6 +89,8 @@ v65 overlay DEBUG on Shadowborn (`com.onemb.shadowborn`): play catcher focused, 
 - [in progress] v64 still no touches. Overlay DEBUG + SHARE dumps injector ping, active layout/mappings, uiVisible, keyFilter, motionSources, and a live event log (why each press was skipped or injected).
 - [in progress] ColorOS may never send pad events to AccessibilityService. Add a full-screen `FLAG_NOT_TOUCHABLE` focusable overlay on games that receives keys/motion and feeds playback. Touches still go to the game.
 - [in progress] v65 dump confirmed NOTME on ping. Move all `SidecarClient` socket I/O onto a dedicated thread so playback ping/inject from the main thread no longer throw.
+- [ok] v66 Shadowborn: `ping=true` `down ok=true`. Inject reaches the game. Stick only nudged; four buttons at once kept tapping one button.
+- [in progress] v66 dump: same pointer ids reused (`B`/`X`/`Y`/`stick` on pid=0/2), no `btn up`, play catcher torn down mid-game (`play catcher focused=true` twice). `TYPE_WINDOWS_CHANGED` treats a focused System UI window as leaving the game and destroys the catcher — key-ups never arrive, HOLD/REPEAT never stop, stick is released. Extra DOWNs then recycle the same pointer. Next: ignore System UI flashes, do not reuse an in-use pointer id, ignore a second DOWN while that button is already held, keep the stick down across a short dead-zone blip.
 
 ### Not tried
 

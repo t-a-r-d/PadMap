@@ -36,6 +36,13 @@ class PadMapAccessibilityService : AccessibilityService() {
         private const val DEAD_ZONE = 0.15f
         private const val TURBO_INTERVAL_MS = 100L
         private const val STICK_TICK_MS = 16L
+        private const val STICK_RELEASE_TICKS = 8
+        private val DEFAULT_AXES = mapOf(
+            MotionEvent.AXIS_X to "L-Stick X",
+            MotionEvent.AXIS_Y to "L-Stick Y",
+            MotionEvent.AXIS_Z to "R-Stick X",
+            MotionEvent.AXIS_RZ to "R-Stick Y"
+        )
     }
 
     private data class StickState(
@@ -59,7 +66,10 @@ class PadMapAccessibilityService : AccessibilityService() {
     private val tapRepeatJobs = mutableMapOf<String, Job>()
     private val axisValues = mutableMapOf<String, Pair<Float, Float>>()
     private val hatState = mutableMapOf<String, Boolean>()
+    private val stickDeadTicks = mutableMapOf<String, Int>()
     private val freePointerIds = ArrayDeque<Int>().apply { addAll(0..9) }
+    val activeHoldCount: Int get() = activeHolds.size
+    val activeStickCount: Int get() = activeSticks.size
 
     private var stickLoopRunning = false
     private var lastSidecarWarnMs = 0L
@@ -78,7 +88,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun allocPointer(): Int = freePointerIds.removeFirstOrNull() ?: 0
+    private fun allocPointer(): Int? = freePointerIds.removeFirstOrNull()
     private fun freePointer(id: Int) {
         if (id >= 0 && !freePointerIds.contains(id)) freePointerIds.addFirst(id)
     }
@@ -157,6 +167,23 @@ class PadMapAccessibilityService : AccessibilityService() {
         runCatching { disableSelf() }
     }
 
+    fun releaseAllPlayback() {
+        tapRepeatJobs.values.forEach { it.cancel() }
+        tapRepeatJobs.clear()
+        turboJobs.values.forEach { it.cancel() }
+        turboJobs.clear()
+        activeHolds.keys.toList().forEach { releaseHold(it) }
+        for (label in activeSticks.keys.toList()) {
+            val state = activeSticks.remove(label) ?: continue
+            SidecarClient.pointerUp(state.pointerId)
+            freePointer(state.pointerId)
+        }
+        stickDeadTicks.clear()
+        hatState.clear()
+        SidecarClient.releaseAll()
+        PlaybackDebug.log("playback released")
+    }
+
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
         disableAndStop()
         super.onTaskRemoved(rootIntent)
@@ -179,11 +206,13 @@ class PadMapAccessibilityService : AccessibilityService() {
             return
         }
         val preset = DataStore.data.value.controllerPresets.find { it.id == layout.controllerPresetId }
+            ?: DataStore.activePreset
+        val axes = preset?.axes?.takeIf { it.isNotEmpty() } ?: DEFAULT_AXES
 
         processHatAxis(event, layout, MotionEvent.AXIS_HAT_X, "D-Left", "D-Right")
         processHatAxis(event, layout, MotionEvent.AXIS_HAT_Y, "D-Up", "D-Down")
 
-        for ((axisCode, axisLabelStr) in (preset?.axes ?: emptyMap())) {
+        for ((axisCode, axisLabelStr) in axes) {
             if (axisCode == MotionEvent.AXIS_HAT_X || axisCode == MotionEvent.AXIS_HAT_Y) continue
             val stickLabel = axisLabelStr.removeSuffix(" X").removeSuffix(" Y")
             if (layout.mappings.none { it.inputName == stickLabel }) continue
@@ -216,7 +245,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 val pkg = event.packageName?.toString() ?: return
-                if (pkg in OverlayManager.BLOCKED_PACKAGES) return
+                if (pkg in OverlayManager.TRANSIENT_PACKAGES) return
                 if (pkg == packageName) return
                 foregroundPackage = pkg
                 lastGamePackage = pkg
@@ -259,15 +288,6 @@ class PadMapAccessibilityService : AccessibilityService() {
                         OverlayManager.instance?.showToast("Layout created: $appName")
                     }
                     updateInputInterception()
-                }
-            }
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
-                if (OverlayManager.instance?.state == OverlayManager.State.CONFIG) return
-                val hasActiveSystemWindow = windows.any {
-                    it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM && it.isFocused
-                }
-                if (hasActiveSystemWindow) {
-                    OverlayManager.instance?.repositionForGame("com.android.systemui")
                 }
             }
         }
@@ -399,10 +419,16 @@ class PadMapAccessibilityService : AccessibilityService() {
         val turboEntries = entries.filter { it.turbo }
         val mode = nonTurbo.firstOrNull()?.let { ButtonTuningStore.get(it.zoneId).mode } ?: ButtonMode.HOLD
         when (mode) {
-            ButtonMode.HOLD -> startHold(label, nonTurbo)
+            ButtonMode.HOLD -> {
+                if (activeHolds.containsKey(label)) {
+                    PlaybackDebug.log("btn $label already down")
+                    return
+                }
+                startHold(label, nonTurbo)
+            }
             ButtonMode.TAP -> fireTaps(nonTurbo)
             ButtonMode.REPEAT -> {
-                tapRepeatJobs[label]?.cancel()
+                if (tapRepeatJobs.containsKey(label)) return
                 tapRepeatJobs[label] = scope.launch {
                     while (isActive) {
                         val captured = nonTurbo.toList()
@@ -428,6 +454,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     private fun onButtonUp(label: String) {
+        PlaybackDebug.log("btn up $label")
         val layout = DataStore.activeLayout ?: return
         val mode = layout.mappings.filter { it.inputName == label && !it.turbo }
             .firstOrNull()?.let { ButtonTuningStore.get(it.zoneId).mode } ?: ButtonMode.HOLD
@@ -451,7 +478,16 @@ class PadMapAccessibilityService : AccessibilityService() {
                 freePointer(pid)
             }
         }
-        val pids = entries.map { allocPointer() }
+        val pids = mutableListOf<Int>()
+        for (entry in entries) {
+            val pid = allocPointer()
+            if (pid == null) {
+                pids.forEach { freePointer(it) }
+                PlaybackDebug.log("down $label no pid")
+                return
+            }
+            pids.add(pid)
+        }
         activeHolds[label] = HoldState(entries, pids)
         entries.forEachIndexed { i, entry ->
             val (x, y) = tapXY(entry)
@@ -473,7 +509,10 @@ class PadMapAccessibilityService : AccessibilityService() {
         entries.forEach { entry ->
             val t = ButtonTuningStore.get(entry.zoneId)
             val (x, y) = tapXY(entry)
-            val pid = allocPointer()
+            val pid = allocPointer() ?: run {
+                PlaybackDebug.log("tap ${entry.inputName} no pid")
+                return@forEach
+            }
             scope.launch {
                 try {
                     mainHandler.post { SidecarClient.pointerDown(pid, x, y) }
@@ -491,8 +530,12 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     private fun startStick(label: String, drag: TouchAction.Drag) {
         if (activeSticks.containsKey(label) || !sidecarReady()) return
-        val pid = allocPointer()
+        val pid = allocPointer() ?: run {
+            PlaybackDebug.log("stick $label no pid")
+            return
+        }
         activeSticks[label] = StickState(drag, drag.centerX, drag.centerY, drag.lookMode, pid)
+        stickDeadTicks[label] = 0
         val ok = SidecarClient.pointerDown(pid, drag.centerX, drag.centerY)
         PlaybackDebug.log("stick $label down pid=$pid ${drag.centerX.toInt()},${drag.centerY.toInt()} ok=$ok ${SidecarClient.lastError}")
         ensureStickLoop()
@@ -511,12 +554,17 @@ class PadMapAccessibilityService : AccessibilityService() {
             val tuning = ButtonTuningStore.getStick(zoneId)
             val scale = tuning.sensitivityPct
             if (mag < 0.01f) {
-                toRelease.add(label)
-                OverlayManager.instance?.updateStickDebug(
-                    label, state.drag.centerX, state.drag.centerY, rawX, rawY, false
-                )
+                val n = (stickDeadTicks[label] ?: 0) + 1
+                stickDeadTicks[label] = n
+                if (n >= STICK_RELEASE_TICKS) {
+                    toRelease.add(label)
+                    OverlayManager.instance?.updateStickDebug(
+                        label, state.drag.centerX, state.drag.centerY, rawX, rawY, false
+                    )
+                }
                 continue
             }
+            stickDeadTicks[label] = 0
             if (state.lookMode) {
                 val step = tuning.lookSpeedPx * scale
                 var nx = state.currentX + sx * step
@@ -543,10 +591,18 @@ class PadMapAccessibilityService : AccessibilityService() {
         }
         for (label in toRelease) {
             val state = activeSticks.remove(label) ?: continue
+            stickDeadTicks.remove(label)
             SidecarClient.pointerUp(state.pointerId)
             freePointer(state.pointerId)
+            PlaybackDebug.log("stick $label up")
         }
-        if (updates.isNotEmpty()) SidecarClient.batchUpdate(updates)
+        if (updates.isNotEmpty()) {
+            val ok = SidecarClient.batchUpdate(updates)
+            val first = updates.entries.first()
+            PlaybackDebug.logMotion(
+                "stick move pid=${first.key} ${first.value.first.toInt()},${first.value.second.toInt()} ok=$ok"
+            )
+        }
     }
 
     private fun tapXY(entry: MappingEntry): Pair<Float, Float> = when (val a = entry.action) {
