@@ -158,7 +158,7 @@ private fun InjectorCard(skin: AppSkin) {
                         busy = true
                         scope.launch {
                             val result = withContext(Dispatchers.IO) {
-                                runCatching { SidecarHost.ensureRunning(ctx) }
+                                runCatching { SidecarHost.ensureRunning(ctx, force = true) }
                             }
                             busy = false
                             running = SidecarClient.isAvailable

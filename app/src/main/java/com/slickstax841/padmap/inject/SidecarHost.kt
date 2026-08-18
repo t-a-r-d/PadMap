@@ -20,6 +20,10 @@ object SidecarHost {
     var status: String = "Injector not started"
         private set
 
+    @Volatile private var inProgress = false
+    @Volatile private var lastAttemptMs = 0L
+    @Volatile private var autoTriedThisProcess = false
+
     fun isWirelessDebugOn(context: Context): Boolean {
         val cr = context.contentResolver
         if (Settings.Global.getInt(cr, "adb_wifi_enabled", 0) > 0) return true
@@ -53,48 +57,66 @@ object SidecarHost {
      * After the first pairing, reconnects and starts the sidecar.
      * Does not require the AOSP adb_wifi_enabled flag — Oppo often leaves that at 0.
      */
-    fun ensureRunning(context: Context): Boolean {
+    fun ensureRunning(context: Context, force: Boolean = false): Boolean {
         if (SidecarClient.ping()) {
             status = "Injector running"
+            dropAdb(context)
             return true
         }
         if (!hasPaired(context)) {
             status = "First-time pair needed"
             return false
         }
-        status = "Looking for wireless debugging…"
-        val nsd = runCatching { NsdAdbFinder.findWithRetry(context, pairing = false) }.getOrNull()
-        val last = lastEndpoint(context)
-        val flagOn = isWirelessDebugOn(context)
-        if (nsd == null && last == null && !flagOn) {
-            status = "Turn on Wireless debugging, then return here"
+        if (inProgress) return false
+        // ColorOS's "Wireless debugging connected" toast resumes Home, which used
+        // to call this again and disconnect/reconnect forever.
+        if (!force && autoTriedThisProcess) return false
+        val now = System.currentTimeMillis()
+        if (!force && now - lastAttemptMs < 20_000L) {
             return false
         }
-        val tried = linkedSetOf<AdbEndpoint>()
-        nsd?.let {
-            tried.add(it)
-            tried.add(AdbEndpoint("127.0.0.1", it.port))
-        }
-        last?.let {
-            tried.add(it)
-            tried.add(AdbEndpoint("127.0.0.1", it.port))
-        }
-        if (tried.isEmpty()) {
-            status = "Wireless debugging looks on, but no connect port was found"
-            return false
-        }
-        var lastErr: Throwable? = null
-        for (ep in tried) {
-            try {
-                start(context, ep.host, ep.port)
-                saveEndpoint(context, ep)
-                return SidecarClient.ping()
-            } catch (t: Throwable) {
-                lastErr = t
+        lastAttemptMs = now
+        inProgress = true
+        try {
+            status = "Looking for wireless debugging…"
+            val nsd = runCatching { NsdAdbFinder.findWithRetry(context, pairing = false) }.getOrNull()
+            val last = lastEndpoint(context)
+            val flagOn = isWirelessDebugOn(context)
+            if (nsd == null && last == null && !flagOn) {
+                status = "Turn on Wireless debugging, then return here"
+                return false
             }
+            val tried = linkedSetOf<AdbEndpoint>()
+            nsd?.let {
+                tried.add(it)
+                tried.add(AdbEndpoint("127.0.0.1", it.port))
+            }
+            last?.let {
+                tried.add(it)
+                tried.add(AdbEndpoint("127.0.0.1", it.port))
+            }
+            if (tried.isEmpty()) {
+                status = "Wireless debugging looks on, but no connect port was found"
+                return false
+            }
+            autoTriedThisProcess = true
+            var lastErr: Throwable? = null
+            for (ep in tried) {
+                try {
+                    start(context, ep.host, ep.port)
+                    saveEndpoint(context, ep)
+                    dropAdb(context)
+                    return SidecarClient.ping()
+                } catch (t: Throwable) {
+                    lastErr = t
+                }
+            }
+            status = lastErr?.message ?: "Could not start injector"
+            throw lastErr ?: IllegalStateException(status)
+        } finally {
+            inProgress = false
+            lastAttemptMs = System.currentTimeMillis()
         }
-        status = lastErr?.message ?: "Could not start injector"
-        throw lastErr ?: IllegalStateException(status)
     }
 
     fun pair(context: Context, host: String, port: Int, code: String) {
@@ -139,6 +161,12 @@ object SidecarHost {
             throw IllegalStateException("Sidecar did not start. ${SidecarClient.lastError} $log".trim())
         }
         status = "Injector running"
+        dropAdb(context)
+    }
+
+    /** Sidecar stays up on localhost. Holding ADB open retriggers ColorOS toasts and resumes. */
+    private fun dropAdb(context: Context) {
+        runCatching { PadMapAdbManager.get(context).disconnect() }
     }
 
     private fun connectAny(context: Context, mgr: PadMapAdbManager, host: String, port: Int): Boolean {
