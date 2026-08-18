@@ -193,19 +193,11 @@ public final class SidecarMain {
         private int touchDeviceId = 0;
 
         boolean init() {
-            try {
-                Class<?> cls;
-                try {
-                    cls = Class.forName("android.hardware.input.InputManager");
-                } catch (ClassNotFoundException e) {
-                    cls = Class.forName("android.hardware.input.InputManagerGlobal");
-                }
-                Method getInstance = cls.getDeclaredMethod("getInstance");
-                getInstance.setAccessible(true);
-                inputManager = getInstance.invoke(null);
-                injectMethod = inputManager.getClass().getMethod(
-                        "injectInputEvent", InputEvent.class, int.class);
-                injectMethod.setAccessible(true);
+            exemptHiddenApis();
+            StringBuilder fail = new StringBuilder();
+            if (tryGetInstance("android.hardware.input.InputManager", fail)
+                    || tryGetInstance("android.hardware.input.InputManagerGlobal", fail)
+                    || tryServiceManager(fail)) {
                 try {
                     setDisplayId = MotionEvent.class.getMethod("setDisplayId", int.class);
                 } catch (Throwable ignored) {
@@ -216,10 +208,91 @@ public final class SidecarMain {
                 System.out.println("padmap-sidecar: displays=" + java.util.Arrays.toString(displayIds)
                         + " touchDev=" + touchDeviceId);
                 return true;
-            } catch (Throwable t) {
-                System.err.println("padmap-sidecar: init " + t);
-                return false;
             }
+            System.err.println("padmap-sidecar: init " + fail);
+            return false;
+        }
+
+        private static void exemptHiddenApis() {
+            try {
+                Class<?> vm = Class.forName("dalvik.system.VMRuntime");
+                Object runtime = vm.getDeclaredMethod("getRuntime").invoke(null);
+                vm.getDeclaredMethod("setHiddenApiExemptions", String[].class)
+                        .invoke(runtime, new Object[] { new String[] { "L" } });
+            } catch (Throwable ignored) {}
+        }
+
+        private boolean tryGetInstance(String className, StringBuilder fail) {
+            try {
+                Class<?> cls = Class.forName(className);
+                Method getInstance = cls.getDeclaredMethod("getInstance");
+                getInstance.setAccessible(true);
+                Object inst = getInstance.invoke(null);
+                if (bindInject(inst, className)) return true;
+                String[] extras = { "getInputManagerService", "getInputManager" };
+                for (int i = 0; i < extras.length; i++) {
+                    try {
+                        Method m = inst.getClass().getMethod(extras[i]);
+                        m.setAccessible(true);
+                        if (bindInject(m.invoke(inst), className + "." + extras[i])) return true;
+                    } catch (Throwable ignored) {}
+                }
+                try {
+                    java.lang.reflect.Field f = inst.getClass().getDeclaredField("mIm");
+                    f.setAccessible(true);
+                    if (bindInject(f.get(inst), className + ".mIm")) return true;
+                } catch (Throwable ignored) {}
+                fail.append(className).append("=no injectInputEvent; ");
+            } catch (Throwable t) {
+                fail.append(className).append("=").append(full(t)).append("; ");
+            }
+            return false;
+        }
+
+        private boolean tryServiceManager(StringBuilder fail) {
+            try {
+                Class<?> sm = Class.forName("android.os.ServiceManager");
+                Object binder = sm.getMethod("getService", String.class).invoke(null, "input");
+                Class<?> stub = Class.forName("android.hardware.input.IInputManager$Stub");
+                Object iim = stub.getMethod("asInterface", Class.forName("android.os.IBinder"))
+                        .invoke(null, binder);
+                if (bindInject(iim, "IInputManager")) return true;
+                fail.append("IInputManager=no injectInputEvent; ");
+            } catch (Throwable t) {
+                fail.append("IInputManager=").append(full(t)).append("; ");
+            }
+            return false;
+        }
+
+        private boolean bindInject(Object inst, String via) {
+            if (inst == null) return false;
+            Class<?> c = inst.getClass();
+            while (c != null) {
+                Method[] methods = c.getDeclaredMethods();
+                for (int i = 0; i < methods.length; i++) {
+                    if (!"injectInputEvent".equals(methods[i].getName())) continue;
+                    Class<?>[] p = methods[i].getParameterTypes();
+                    if (p.length < 2 || p.length > 3) continue;
+                    if (!InputEvent.class.isAssignableFrom(p[0])) continue;
+                    methods[i].setAccessible(true);
+                    injectMethod = methods[i];
+                    inputManager = inst;
+                    System.out.println("padmap-sidecar: inject via " + via + " " + methods[i]);
+                    return true;
+                }
+                c = c.getSuperclass();
+            }
+            return false;
+        }
+
+        private static String full(Throwable t) {
+            StringBuilder sb = new StringBuilder();
+            for (Throwable c = t; c != null; c = c.getCause()) {
+                if (sb.length() > 0) sb.append(" caused by ");
+                sb.append(c.getClass().getName());
+                if (c.getMessage() != null) sb.append(": ").append(c.getMessage());
+            }
+            return sb.toString();
         }
 
         synchronized boolean down(int id, float x, float y) {
@@ -313,10 +386,15 @@ public final class SidecarMain {
 
         private boolean invokeInject(MotionEvent ev, int mode) {
             try {
-                Object ret = injectMethod.invoke(inputManager, ev, Integer.valueOf(mode));
+                Object ret;
+                if (injectMethod.getParameterTypes().length >= 3) {
+                    ret = injectMethod.invoke(inputManager, ev, Integer.valueOf(mode), Integer.valueOf(0));
+                } else {
+                    ret = injectMethod.invoke(inputManager, ev, Integer.valueOf(mode));
+                }
                 return !(ret instanceof Boolean) || ((Boolean) ret).booleanValue();
             } catch (Throwable t) {
-                System.err.println("padmap-sidecar: inject mode " + mode + " " + t);
+                System.err.println("padmap-sidecar: inject mode " + mode + " " + full(t));
                 return false;
             }
         }
