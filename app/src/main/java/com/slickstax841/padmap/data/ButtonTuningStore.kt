@@ -27,8 +27,9 @@ data class ButtonTuning(
 }
 
 data class StickTuning(
-    var lookSpeedPx: Float = 5f,
+    var lookSpeed: Float = 5f,
     var sensitivityPct: Float = 1.0f,
+    var invertY: Boolean = false,
     var showDebug: Boolean = false
 )
 

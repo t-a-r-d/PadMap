@@ -50,7 +50,10 @@ class PadMapAccessibilityService : AccessibilityService() {
         var currentX: Float,
         var currentY: Float,
         val lookMode: Boolean,
-        val pointerId: Int
+        val pointerId: Int,
+        var lastTickMs: Long = 0L,
+        var filtX: Float = 0f,
+        var filtY: Float = 0f
     )
 
     private data class HoldState(
@@ -621,6 +624,7 @@ class PadMapAccessibilityService : AccessibilityService() {
                 ?.firstOrNull { it.inputName == label }?.zoneId?.ifBlank { label } ?: label
             val tuning = ButtonTuningStore.getStick(zoneId)
             val scale = tuning.sensitivityPct
+            val lookY = if (tuning.invertY) -sy else sy
             if (mag < 0.01f) {
                 val n = (stickDeadTicks[label] ?: 0) + 1
                 stickDeadTicks[label] = n
@@ -634,28 +638,39 @@ class PadMapAccessibilityService : AccessibilityService() {
             }
             stickDeadTicks[label] = 0
             if (state.lookMode) {
-                val step = tuning.lookSpeedPx * scale
-                var nx = state.currentX + sx * step
-                var ny = state.currentY + sy * step
+                state.filtX += (sx - state.filtX) * 0.35f
+                state.filtY += (lookY - state.filtY) * 0.35f
+                val now = android.os.SystemClock.uptimeMillis()
+                val dt = if (state.lastTickMs == 0L) 0.016f
+                    else ((now - state.lastTickMs).coerceIn(8L, 48L)) / 1000f
+                state.lastTickMs = now
+                val step = tuning.lookSpeed * 80f * scale * dt
+                var nx = state.currentX + state.filtX * step
+                var ny = state.currentY + state.filtY * step
                 val dx = nx - state.drag.centerX
                 val dy = ny - state.drag.centerY
-                if (sqrt(dx * dx + dy * dy) > state.drag.radius) {
+                val sweep = maxOf(state.drag.radius, 200f)
+                if (sqrt(dx * dx + dy * dy) > sweep * 0.92f) {
+                    val fm = sqrt(state.filtX * state.filtX + state.filtY * state.filtY)
+                        .coerceAtLeast(0.01f)
                     SidecarClient.pointerUp(state.pointerId)
-                    SidecarClient.pointerDown(state.pointerId, state.drag.centerX, state.drag.centerY)
-                    nx = state.drag.centerX + sx * step
-                    ny = state.drag.centerY + sy * step
+                    val ox = state.drag.centerX + state.filtX / fm * 10f
+                    val oy = state.drag.centerY + state.filtY / fm * 10f
+                    SidecarClient.pointerDown(state.pointerId, ox, oy)
+                    nx = ox + state.filtX * step
+                    ny = oy + state.filtY * step
                 }
                 state.currentX = nx
                 state.currentY = ny
                 updates[state.pointerId] = nx to ny
             } else {
                 val nx = state.drag.centerX + sx * state.drag.radius * scale
-                val ny = state.drag.centerY + sy * state.drag.radius * scale
+                val ny = state.drag.centerY + lookY * state.drag.radius * scale
                 state.currentX = nx
                 state.currentY = ny
                 updates[state.pointerId] = nx to ny
             }
-            OverlayManager.instance?.updateStickDebug(label, state.currentX, state.currentY, sx, sy, true)
+            OverlayManager.instance?.updateStickDebug(label, state.currentX, state.currentY, sx, lookY, true)
         }
         for (label in toRelease) {
             val state = activeSticks.remove(label) ?: continue

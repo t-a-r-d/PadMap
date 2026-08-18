@@ -2073,18 +2073,21 @@ class OverlayManager(private val context: Context) {
         val tuning = ButtonTuningStore.getStick(stickTuneZoneId)
         val container = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
 
-        container.addView(stepperRow(
-            label = "LOOK SPD",
-            getValue = { "${ButtonTuningStore.getStick(stickTuneZoneId).lookSpeedPx.toInt()}px" },
-            minus = { amount ->
-                ButtonTuningStore.getStick(stickTuneZoneId).lookSpeedPx =
-                    (ButtonTuningStore.getStick(stickTuneZoneId).lookSpeedPx - amount).coerceAtLeast(1f)
-            },
-            plus = { amount ->
-                ButtonTuningStore.getStick(stickTuneZoneId).lookSpeedPx =
-                    (ButtonTuningStore.getStick(stickTuneZoneId).lookSpeedPx + amount).coerceAtMost(40f)
-            }
-        ))
+        val lookZone = editingZones.find { it.id == stickTuneZoneId }?.lookMode == true
+        if (lookZone) {
+            container.addView(stepperRow(
+                label = "PAN SPD",
+                getValue = { "${ButtonTuningStore.getStick(stickTuneZoneId).lookSpeed.toInt()}" },
+                minus = { amount ->
+                    ButtonTuningStore.getStick(stickTuneZoneId).lookSpeed =
+                        (ButtonTuningStore.getStick(stickTuneZoneId).lookSpeed - amount).coerceAtLeast(1f)
+                },
+                plus = { amount ->
+                    ButtonTuningStore.getStick(stickTuneZoneId).lookSpeed =
+                        (ButtonTuningStore.getStick(stickTuneZoneId).lookSpeed + amount).coerceAtMost(20f)
+                }
+            ))
+        }
 
         container.addView(stepperRow(
             label = "SENS",
@@ -2100,6 +2103,47 @@ class OverlayManager(private val context: Context) {
                     (Math.round((cur + 0.1f * amount) * 10) / 10f).coerceAtMost(3.0f)
             }
         ))
+
+        val invertRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) }
+        }
+        invertRow.addView(TextView(context).apply {
+            text = "INVERT Y"
+            textSize = 10f
+            setTextColor(Color.parseColor("#AAAAAA"))
+            layoutParams = LinearLayout.LayoutParams(dp(72), LinearLayout.LayoutParams.WRAP_CONTENT)
+        })
+        listOf("OFF", "ON").forEach { option ->
+            val isActive = (option == "ON") == ButtonTuningStore.getStick(stickTuneZoneId).invertY
+            invertRow.addView(TextView(context).apply {
+                text = option
+                textSize = 10f
+                setPadding(dp(7), dp(4), dp(7), dp(4))
+                setTextColor(if (isActive) Color.BLACK else Color.parseColor("#BB88FF"))
+                background = if (isActive) GradientDrawable().apply {
+                    setColor(Color.parseColor("#BB88FF"))
+                    cornerRadius = dp(4).toFloat()
+                } else GradientDrawable().apply {
+                    setColor(Color.TRANSPARENT)
+                    setStroke(dp(1), Color.parseColor("#BB88FF"))
+                    cornerRadius = dp(4).toFloat()
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(4) }
+                setOnClickListener {
+                    ButtonTuningStore.getStick(stickTuneZoneId).invertY = option == "ON"
+                    refreshTuningContent()
+                }
+            })
+        }
+        container.addView(invertRow)
 
         // DEBUG overlay toggle row
         val debugRow = LinearLayout(context).apply {

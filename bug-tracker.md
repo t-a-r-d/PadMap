@@ -160,6 +160,27 @@ A11y already delivers pad keys/motion (v67). The catcher is not needed to play.
 
 ---
 
+## BUG-011 — Look-stick pan is jittery; SPD shown as px; no invert-Y
+
+**Status:** in progress
+**Reported:** 2026-08-18
+
+Look pan stutters. Tuning SPD is labelled in pixels, which does not read as how fast the camera turns. Need a vertical invert on the stick.
+
+### Cause
+
+Look mode walks the pointer in `lookSpeedPx` steps and, at the zone radius, `pointerUp` + `pointerDown` at centre. That reset is a hitch every few hundred ms. Ticks are not time-based, so sidecar delay makes the swipe uneven.
+
+### Attempts
+
+- [in progress] Time-based pan (SPD 1–20 = turn rate, not px). Soften axis, recycle past a wider sweep with a down slightly along the look direction (not at centre). Invert-Y toggle on stick tune.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-010 — Turbo press closes the overlay and kills all controls
 
 **Status:** in progress
