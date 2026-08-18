@@ -2,6 +2,7 @@ package com.slickstax841.padmap.inject
 
 import android.content.Context
 import android.provider.Settings
+import android.util.Base64
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 import java.nio.charset.Charset
@@ -145,7 +146,7 @@ object SidecarHost {
         // Do not cp from /storage/emulated/0 — ColorOS FUSE often never returns.
         val jar = readAssetJar(context)
         pushJar(mgr, jar, remote)
-        val copied = shell(mgr, "wc -c < $remote").filter { it.isDigit() }.toIntOrNull()
+        val copied = remoteSize(mgr, remote)
         if (copied != jar.size) {
             throw IllegalStateException("Injector copy failed (phone has $copied bytes, expected ${jar.size})")
         }
@@ -242,8 +243,21 @@ object SidecarHost {
         return context.assets.open("sidecar/padmap-sidecar.jar").use { it.readBytes() }
     }
 
+    private fun remoteSize(mgr: PadMapAdbManager, remote: String): Int? {
+        return shell(mgr, "wc -c < $remote").filter { it.isDigit() }.toIntOrNull()
+    }
+
     private fun pushJar(mgr: PadMapAdbManager, bytes: ByteArray, remote: String) {
-        val stream = mgr.openStream("shell:dd of=$remote")
+        // Default dd bs=512 drops the last partial block when the ADB stream
+        // closes without a clean EOF (v55: 6656 of 6861).
+        pushViaStream(mgr, "dd of=$remote bs=${bytes.size} count=1", bytes)
+        if (remoteSize(mgr, remote) == bytes.size) return
+        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        shell(mgr, "printf '%s' '$b64' | base64 -d > $remote")
+    }
+
+    private fun pushViaStream(mgr: PadMapAdbManager, shellCmd: String, bytes: ByteArray) {
+        val stream = mgr.openStream("shell:$shellCmd")
         try {
             stream.openOutputStream().use { out ->
                 out.write(bytes)

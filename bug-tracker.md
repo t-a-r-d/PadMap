@@ -7,7 +7,7 @@ CC reads this before investigating any bug.
 
 ## BUG-001 — Wireless debugging “connected” toast loops (Oppo A40)
 
-**Status:** fix written, not on device yet (v54 is still the shipped APK)
+**Status:** v55 on device (toast loop / error text). Sidecar still not up — see BUG-002.
 **Reported:** 2026-08-18 on Oppo A40 / ColorOS, PadMap v54
 
 After pairing, PadMap reaches wireless ADB, then Android’s “Wireless debugging connected” toast keeps sliding down. Looks like connect → drop → connect.
@@ -23,9 +23,28 @@ Home `ON_RESUME` calls `SidecarHost.ensureRunning`. `connect()` shows ColorOS’
 
 ### Not tried
 
-- Device confirmation on A40 after the next APK.
+- Confirm toast loop is gone on a later APK after BUG-002.
 
 ---
+
+## BUG-002 — Injector jar copy truncated on Oppo A40 (v55)
+
+**Status:** fix written, not on device yet
+**Reported:** 2026-08-18 on Oppo A40, PadMap v55
+
+Home: `Injector copy failed (phone has 6656 bytes, expected 6861)`.
+
+### Cause
+
+`shell:dd of=file` uses a 512-byte block. 13 × 512 = 6656; the last 205 bytes never landed. Closing the ADB stream is not a clean EOF, so toybox `dd` drops the partial last block.
+
+### Attempts
+
+- [in progress] Push with `dd bs=<exact size> count=1` so it stops after the full jar. If the size still mismatches, write base64 over the shell and `base64 -d` on the phone. Not on an APK until Damien says to build.
+
+### Not tried
+
+- Device confirmation on A40 after the next APK.
 
 ## How to use this file
 
