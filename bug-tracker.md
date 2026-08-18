@@ -152,6 +152,7 @@ A11y already delivers pad keys/motion (v67). The catcher is not needed to play.
 
 - [in progress] Do not add the focusable play catcher. Pin the icon at `y=4dp` with no extra status-bar inset, and re-pin after the game has a moment to go immersive.
 - [in progress] Release playback when leaving a game and when entering one. Only filter keys in a mapped game (or config). Pass the key through if we are not actually injecting. Re-down a stale hold instead of ignoring it.
+- [in progress] v67 dump: inject works after the overlay ✕. That ✕ is `closeAndDisableIcon` — it removes the config overlay and does **not** re-add the catcher, so the game gets focus and stale holds are already cleared. Game start never runs that kick (`repositionForGame` no-ops if the icon is not created yet; `serviceInfo` is only written when flags change). Next: same kick on game enter and on ✕/SAVE (`restoreGamePackage` + always assign `serviceInfo`). ✕ closes the menu and keeps the icon.
 
 ### Not tried
 

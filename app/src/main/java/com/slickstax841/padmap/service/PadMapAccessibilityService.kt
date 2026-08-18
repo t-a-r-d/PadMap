@@ -159,7 +159,15 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     fun restoreGamePackage(pkg: String) {
-        if (pkg.isNotBlank()) foregroundPackage = pkg
+        if (pkg.isBlank()) return
+        foregroundPackage = pkg
+        lastGamePackage = pkg
+        if (playingPackage != pkg) {
+            releaseAllPlayback()
+            playingPackage = pkg
+            PlaybackDebug.log("enter game $pkg")
+        }
+        updateInputInterception()
     }
 
     fun disableAndStop() {
@@ -318,16 +326,13 @@ class PadMapAccessibilityService : AccessibilityService() {
             DataStore.activeLayout?.mappings?.any { it.inputName.isNotBlank() } == true
         val wantKeys = configOpen || mappedGame
         val newFlags = if (wantKeys) info.flags or flagKey else info.flags and flagKey.inv()
-        var changed = info.flags != newFlags
         info.flags = newFlags
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val newSources = InputDevice.SOURCE_JOYSTICK or InputDevice.SOURCE_GAMEPAD
-            if (info.motionEventSources != newSources) {
-                info.motionEventSources = newSources
-                changed = true
-            }
+            info.motionEventSources = InputDevice.SOURCE_JOYSTICK or InputDevice.SOURCE_GAMEPAD
         }
-        if (changed) serviceInfo = info
+        // Always write back. ColorOS drops key/motion delivery on game start;
+        // assigning serviceInfo again is what overlay ✕ restores (BUG-008).
+        serviceInfo = info
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {

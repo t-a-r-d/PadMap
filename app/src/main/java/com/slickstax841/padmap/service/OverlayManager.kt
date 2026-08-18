@@ -212,6 +212,7 @@ class OverlayManager(private val context: Context) {
                 return@post
             }
             if (pkg in TRANSIENT_PACKAGES) return@post
+            if (iconView == null) showFloatingIcon()
             val view = iconView ?: return@post
             if (!com.slickstax841.padmap.data.GameScanner.isInstalledGame(context, pkg)) {
                 view.visibility = View.GONE
@@ -371,6 +372,9 @@ class OverlayManager(private val context: Context) {
                     }
                 }
                 loadLayout(existing.id)
+                if (data.activeLayoutId != existing.id) {
+                    DataStore.update { it.copy(activeLayoutId = existing.id) }
+                }
             } else {
                 val newId = UUID.randomUUID().toString()
                 val newLayout = GameLayout(
@@ -432,11 +436,7 @@ class OverlayManager(private val context: Context) {
             removeConfig()
             iconView?.visibility = View.VISIBLE
             PadMapAccessibilityService.instance?.restoreGamePackage(gamePackage)
-            PadMapAccessibilityService.instance?.updateInputInterception()
             configGamePackage = ""
-            if (gamePackage.isNotBlank() &&
-                com.slickstax841.padmap.data.GameScanner.isInstalledGame(context, gamePackage)
-            ) showPlayCatcher()
         }
     }
 
@@ -656,7 +656,7 @@ class OverlayManager(private val context: Context) {
             textSize = 13f
             setTextColor(Color.parseColor("#888888"))
             setPadding(dp(6), dp(6), dp(6), dp(6))
-            setOnClickListener { closeAndDisableIcon() }
+            setOnClickListener { exitConfigMode() }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
