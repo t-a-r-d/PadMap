@@ -117,7 +117,7 @@ private fun InjectorCard(skin: AppSkin) {
             if (paired)
                 "Already paired. Turn on Wireless debugging (Developer options) and tap START. No code after the first time."
             else
-                "One-time setup: Developer options \u2192 Wireless debugging ON \u2192 Pair device with pairing code \u2192 type the 6 digits and paste the IP:port line (the one with dots).",
+                "Leave the pair popup open. A new popup makes a new code AND a new port. Type the 6 digits from that one screen. Paste IP:port only if auto-find fails.",
             fontSize = 12.sp, color = skin.textSecondary, fontFamily = skin.labelFont
         )
         if (!paired) {
@@ -191,15 +191,15 @@ private fun InjectorCard(skin: AppSkin) {
                                         com.slickstax841.padmap.inject.AdbEndpoint.parse(pairPort)
                                             ?: error("Pair address should look like 192.168.0.12:37123")
                                     } else {
-                                        NsdAdbFinder.find(ctx, pairing = true)
-                                            ?: error("Could not find pairing port. Paste IP:port from the Android pair dialog.")
+                                        NsdAdbFinder.findWithRetry(ctx, pairing = true)
+                                            ?: error("Could not find pairing port. Paste the IP:port from the same open popup.")
                                     }
                                     SidecarHost.pair(ctx, pairEp.host, pairEp.port, code)
                                     val connEp = if (connectPort.isNotBlank()) {
                                         com.slickstax841.padmap.inject.AdbEndpoint.parse(connectPort)
                                             ?: error("Connect address should look like 192.168.0.12:5555")
                                     } else {
-                                        NsdAdbFinder.find(ctx, pairing = false)
+                                        NsdAdbFinder.findWithRetry(ctx, pairing = false)
                                             ?: error("Could not find wireless debugging port.")
                                     }
                                     SidecarHost.start(ctx, connEp.host, connEp.port)

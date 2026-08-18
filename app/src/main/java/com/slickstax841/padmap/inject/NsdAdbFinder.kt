@@ -64,4 +64,12 @@ object NsdAdbFinder {
             runCatching { nsd.stopServiceDiscovery(listener) }
         }
     }
+
+    fun findWithRetry(context: Context, pairing: Boolean, attempts: Int = 4): AdbEndpoint? {
+        repeat(attempts) { i ->
+            find(context, pairing)?.let { return it }
+            if (i < attempts - 1) Thread.sleep(800)
+        }
+        return null
+    }
 }

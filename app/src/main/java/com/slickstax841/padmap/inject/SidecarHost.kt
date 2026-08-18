@@ -46,7 +46,7 @@ object SidecarHost {
             status = "First-time pair needed"
             return false
         }
-        val ep = NsdAdbFinder.find(context, pairing = false)
+        val ep = NsdAdbFinder.findWithRetry(context, pairing = false)
             ?: throw IllegalStateException("Wireless debugging is on but the port was not found. Open PadMap Settings.")
         start(context, ep.host, ep.port)
         return SidecarClient.ping()
