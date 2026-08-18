@@ -18,20 +18,22 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Date;
 import java.util.Random;
 
+import android.sun.security.x509.AlgorithmId;
+import android.sun.security.x509.CertificateAlgorithmId;
+import android.sun.security.x509.CertificateExtensions;
+import android.sun.security.x509.CertificateIssuerName;
+import android.sun.security.x509.CertificateSerialNumber;
+import android.sun.security.x509.CertificateSubjectName;
+import android.sun.security.x509.CertificateValidity;
+import android.sun.security.x509.CertificateVersion;
+import android.sun.security.x509.CertificateX509Key;
+import android.sun.security.x509.KeyIdentifier;
+import android.sun.security.x509.PrivateKeyUsageExtension;
+import android.sun.security.x509.SubjectKeyIdentifierExtension;
+import android.sun.security.x509.X500Name;
+import android.sun.security.x509.X509CertImpl;
+import android.sun.security.x509.X509CertInfo;
 import io.github.muntashirakon.adb.AbsAdbConnectionManager;
-import sun.security.x509.AlgorithmId;
-import sun.security.x509.CertificateAlgorithmId;
-import sun.security.x509.CertificateExtensions;
-import sun.security.x509.CertificateSerialNumber;
-import sun.security.x509.CertificateValidity;
-import sun.security.x509.CertificateVersion;
-import sun.security.x509.CertificateX509Key;
-import sun.security.x509.KeyIdentifier;
-import sun.security.x509.PrivateKeyUsageExtension;
-import sun.security.x509.SubjectKeyIdentifierExtension;
-import sun.security.x509.X500Name;
-import sun.security.x509.X509CertImpl;
-import sun.security.x509.X509CertInfo;
 
 /**
  * On-device wireless ADB connection. Pairing keys live in the app files dir.
@@ -97,10 +99,10 @@ public final class PadMapAdbManager extends AbsAdbConnectionManager {
         info.set("version", new CertificateVersion(2));
         info.set("serialNumber", new CertificateSerialNumber(new Random().nextInt() & Integer.MAX_VALUE));
         info.set("algorithmID", new CertificateAlgorithmId(AlgorithmId.get(algorithmName)));
-        info.set("subject", new sun.security.x509.CertificateSubjectName(name));
+        info.set("subject", new CertificateSubjectName(name));
         info.set("key", new CertificateX509Key(publicKey));
         info.set("validity", validity);
-        info.set("issuer", new sun.security.x509.CertificateIssuerName(name));
+        info.set("issuer", new CertificateIssuerName(name));
         info.set("extensions", extensions);
         X509CertImpl cert = new X509CertImpl(info);
         cert.sign(privateKey, algorithmName);
