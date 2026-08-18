@@ -62,7 +62,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     private val freePointerIds = ArrayDeque<Int>().apply { addAll(0..9) }
 
     private var stickLoopRunning = false
-    private var warnedNoSidecar = false
+    private var lastSidecarWarnMs = 0L
 
     var foregroundPackage: String = ""
         private set
@@ -92,9 +92,11 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     private fun sidecarReady(): Boolean {
         if (SidecarClient.isAvailable || SidecarClient.ping()) return true
-        if (!warnedNoSidecar) {
-            warnedNoSidecar = true
-            OverlayManager.instance?.showToast("Injector not running — pair wireless debugging in Settings")
+        val now = System.currentTimeMillis()
+        if (now - lastSidecarWarnMs > 2500L) {
+            lastSidecarWarnMs = now
+            val why = SidecarClient.lastError.ifBlank { "not paired" }
+            OverlayManager.instance?.showToast("Injector off ($why) — Settings → OPEN DEVELOPER")
         }
         return false
     }

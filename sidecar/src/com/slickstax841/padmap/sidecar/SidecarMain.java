@@ -174,6 +174,9 @@ public final class SidecarMain {
         private final Map<Integer, Pointer> active = new LinkedHashMap<Integer, Pointer>();
         private Object inputManager;
         private Method injectMethod;
+        private Method setDisplayId;
+        private int[] displayIds = new int[] { 0 };
+        private int touchDeviceId = 0;
 
         boolean init() {
             try {
@@ -189,6 +192,15 @@ public final class SidecarMain {
                 injectMethod = inputManager.getClass().getMethod(
                         "injectInputEvent", InputEvent.class, int.class);
                 injectMethod.setAccessible(true);
+                try {
+                    setDisplayId = MotionEvent.class.getMethod("setDisplayId", int.class);
+                } catch (Throwable ignored) {
+                    setDisplayId = null;
+                }
+                displayIds = readDisplayIds();
+                touchDeviceId = findTouchscreenId();
+                System.out.println("padmap-sidecar: displays=" + java.util.Arrays.toString(displayIds)
+                        + " touchDev=" + touchDeviceId);
                 return true;
             } catch (Throwable t) {
                 System.err.println("padmap-sidecar: init " + t);
@@ -264,16 +276,58 @@ public final class SidecarMain {
             MotionEvent ev = MotionEvent.obtain(
                     firstDown, SystemClock.uptimeMillis(),
                     encoded, count, props, coords,
-                    0, 0, 1f, 1f, 0, 0,
+                    0, 0, 1f, 1f, touchDeviceId, 0,
                     InputDevice.SOURCE_TOUCHSCREEN, 0);
             try {
-                injectMethod.invoke(inputManager, ev, 0);
-                return true;
+                boolean any = false;
+                int[] ids = displayIds.length == 0 ? new int[] { 0 } : displayIds;
+                for (int displayId : ids) {
+                    if (setDisplayId != null) {
+                        try { setDisplayId.invoke(ev, Integer.valueOf(displayId)); } catch (Throwable ignored) {}
+                    }
+                    if (invokeInject(ev, 0) || invokeInject(ev, 2)) any = true;
+                }
+                if (!any) System.err.println("padmap-sidecar: inject returned false");
+                return any;
             } catch (Throwable t) {
                 System.err.println("padmap-sidecar: inject " + t);
                 return false;
             } finally {
                 ev.recycle();
+            }
+        }
+
+        private boolean invokeInject(MotionEvent ev, int mode) {
+            try {
+                Object ret = injectMethod.invoke(inputManager, ev, Integer.valueOf(mode));
+                return !(ret instanceof Boolean) || ((Boolean) ret).booleanValue();
+            } catch (Throwable t) {
+                System.err.println("padmap-sidecar: inject mode " + mode + " " + t);
+                return false;
+            }
+        }
+
+        private static int findTouchscreenId() {
+            try {
+                int[] ids = InputDevice.getDeviceIds();
+                for (int i = 0; i < ids.length; i++) {
+                    InputDevice d = InputDevice.getDevice(ids[i]);
+                    if (d != null && (d.getSources() & InputDevice.SOURCE_TOUCHSCREEN) != 0) {
+                        return d.getId();
+                    }
+                }
+            } catch (Throwable ignored) {}
+            return 0;
+        }
+
+        private static int[] readDisplayIds() {
+            try {
+                Class<?> cls = Class.forName("android.hardware.display.DisplayManagerGlobal");
+                Object inst = cls.getDeclaredMethod("getInstance").invoke(null);
+                return (int[]) inst.getClass().getMethod("getDisplayIds").invoke(inst);
+            } catch (Throwable t) {
+                System.err.println("padmap-sidecar: displays " + t);
+                return new int[] { 0 };
             }
         }
     }
