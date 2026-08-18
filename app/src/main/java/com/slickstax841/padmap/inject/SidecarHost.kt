@@ -111,7 +111,10 @@ object SidecarHost {
         status = "Connecting ADB…"
         val mgr = PadMapAdbManager.get(context)
         mgr.setTimeout(8, TimeUnit.SECONDS)
-        if (!connectAny(mgr, connectHost, connectPort)) {
+        // pair() and a failed first connect can leave the manager "connected";
+        // libadb then returns false immediately on the next connect().
+        Thread.sleep(400)
+        if (!connectAny(context, mgr, connectHost, connectPort)) {
             throw IllegalStateException("ADB connect failed on $connectHost:$connectPort")
         }
         saveEndpoint(context, AdbEndpoint(connectHost, connectPort))
@@ -138,10 +141,46 @@ object SidecarHost {
         status = "Injector running"
     }
 
-    private fun connectAny(mgr: PadMapAdbManager, host: String, port: Int): Boolean {
-        if (mgr.connect(host, port)) return true
-        if (host != "127.0.0.1" && mgr.connect("127.0.0.1", port)) return true
+    private fun connectAny(context: Context, mgr: PadMapAdbManager, host: String, port: Int): Boolean {
+        val hosts = linkedSetOf(host, "127.0.0.1")
+        runCatching {
+            io.github.muntashirakon.adb.android.AndroidUtils.getHostIpAddress(context)
+        }.getOrNull()?.takeIf { it.isNotBlank() }?.let { hosts.add(it) }
+        localIpv4().forEach { hosts.add(it) }
+        var last: Throwable? = null
+        for (h in hosts) {
+            runCatching { mgr.disconnect() }
+            try {
+                if (mgr.connect(h, port)) return true
+            } catch (t: Throwable) {
+                last = t
+            }
+        }
+        runCatching { mgr.disconnect() }
+        try {
+            if (mgr.autoConnect(context, 8000L)) return true
+        } catch (t: Throwable) {
+            last = t
+        }
+        if (last != null) status = "ADB connect failed: ${last.message}"
         return false
+    }
+
+    private fun localIpv4(): List<String> {
+        val out = mutableListOf<String>()
+        runCatching {
+            val en = java.net.NetworkInterface.getNetworkInterfaces() ?: return out
+            while (en.hasMoreElements()) {
+                val addrs = en.nextElement().inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val a = addrs.nextElement()
+                    if (a is java.net.Inet4Address && !a.isLoopbackAddress) {
+                        a.hostAddress?.let { out.add(it) }
+                    }
+                }
+            }
+        }
+        return out
     }
 
     private fun readAssetJar(context: Context): ByteArray {
