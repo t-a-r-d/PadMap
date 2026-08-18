@@ -74,6 +74,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onDestroy() {
+        if (isFinishing) {
+            PadMapAccessibilityService.instance?.disableAndStop()
+        }
+        super.onDestroy()
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (event.source and InputDevice.SOURCE_GAMEPAD != 0 ||
             event.source and InputDevice.SOURCE_JOYSTICK != 0) {

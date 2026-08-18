@@ -112,6 +112,23 @@ Floating config button disappears off the top when overlay size was set in lands
 
 - Device confirmation.
 
+---
+
+## BUG-006 — Swiping PadMap from Recents leaves overlay/a11y running
+
+**Status:** in progress
+**Reported:** 2026-08-18
+
+EXIT on Home calls `disableAndStop()` then `finishAndRemoveTask()`. Swiping the task away only kills the activity; the accessibility service and overlay stay up.
+
+### Attempts
+
+- [in progress] `onTaskRemoved` and `onDestroy` (when finishing) call the same `disableAndStop()` as EXIT.
+
+### Not tried
+
+- Device confirmation.
+
 ## How to use this file
 
 When a bug is reported:

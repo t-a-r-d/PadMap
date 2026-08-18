@@ -154,7 +154,12 @@ class PadMapAccessibilityService : AccessibilityService() {
     fun disableAndStop() {
         OverlayManager.instance?.detach()
         OverlayManager.instance = null
-        disableSelf()
+        runCatching { disableSelf() }
+    }
+
+    override fun onTaskRemoved(rootIntent: android.content.Intent?) {
+        disableAndStop()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onInterrupt() {}
