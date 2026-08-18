@@ -29,6 +29,8 @@ data class MappingEntry(
     val inputName: String,
     val action: TouchAction,
     val turbo: Boolean = false,
+    // When false, PadMap does not intercept this input — the game keeps its own mapping.
+    val overrideGame: Boolean = true,
     // Stable identifier for the zone this entry belongs to. Tuning is keyed by this ID,
     // not by inputName — so reassigning a zone to a different button preserves its tuning.
     val zoneId: String = ""

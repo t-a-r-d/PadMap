@@ -44,7 +44,8 @@ object PlaybackDebug {
             )
             appendLine(
                 "layout=${layout?.name} maps=${layout?.mappings?.size ?: 0} " +
-                    "named=${layout?.mappings?.count { it.inputName.isNotBlank() } ?: 0} pkg=${layout?.packageName}"
+                    "named=${layout?.mappings?.count { it.inputName.isNotBlank() } ?: 0} " +
+                    "ov=${layout?.mappings?.count { it.overrideGame } ?: 0} pkg=${layout?.packageName}"
             )
             appendLine(
                 "names=${layout?.mappings?.joinToString(",") { it.inputName.ifBlank { "?" } }}"

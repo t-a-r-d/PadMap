@@ -246,7 +246,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         for ((axisCode, axisLabelStr) in axes) {
             if (axisCode == MotionEvent.AXIS_HAT_X || axisCode == MotionEvent.AXIS_HAT_Y) continue
             val stickLabel = axisLabelStr.removeSuffix(" X").removeSuffix(" Y")
-            if (layout.mappings.none { it.inputName == stickLabel }) continue
+            if (layout.mappings.none { it.inputName == stickLabel && it.overrideGame }) continue
             val value = event.getAxisValue(axisCode)
             val isX = axisLabelStr.endsWith(" X")
             val cur = axisValues[stickLabel] ?: (0f to 0f)
@@ -255,7 +255,7 @@ class PadMapAccessibilityService : AccessibilityService() {
 
         for ((stickLabel, pair) in axisValues) {
             val (rawX, rawY) = pair
-            val entries = layout.mappings.filter { it.inputName == stickLabel }
+            val entries = layout.mappings.filter { it.inputName == stickLabel && it.overrideGame }
             val deadZone = (entries.firstOrNull()?.action as? TouchAction.Drag)?.deadZone ?: DEAD_ZONE
             val (sx, sy) = radialDeadZone(rawX, rawY, deadZone)
             val mag = sqrt(sx * sx + sy * sy)
@@ -344,7 +344,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         val flagKey = android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
         val configOpen = OverlayManager.instance?.state == OverlayManager.State.CONFIG
         val mappedGame = playingPackage.isNotBlank() &&
-            DataStore.activeLayout?.mappings?.any { it.inputName.isNotBlank() } == true
+            DataStore.activeLayout?.mappings?.any { it.inputName.isNotBlank() && it.overrideGame } == true
         val wantKeys = configOpen || mappedGame
         val newFlags = if (wantKeys) info.flags or flagKey else info.flags and flagKey.inv()
         info.flags = newFlags
@@ -388,9 +388,9 @@ class PadMapAccessibilityService : AccessibilityService() {
             if (event.action == KeyEvent.ACTION_DOWN) PlaybackDebug.log("key $label no layout")
             return false
         }
-        if (layout.mappings.none { it.inputName == label }) {
+        if (layout.mappings.none { it.inputName == label && it.overrideGame }) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
-                PlaybackDebug.log("key $label not mapped")
+                PlaybackDebug.log("key $label pass (no override)")
             return false
         }
         when (event.action) {
@@ -456,9 +456,9 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     private fun onButtonDown(label: String) {
         val layout = DataStore.activeLayout ?: return
-        val entries = layout.mappings.filter { it.inputName == label }
+        val entries = layout.mappings.filter { it.inputName == label && it.overrideGame }
         if (entries.isEmpty()) {
-            PlaybackDebug.log("btn $label no zones")
+            PlaybackDebug.log("btn $label no override")
             return
         }
         if (!sidecarReady()) return

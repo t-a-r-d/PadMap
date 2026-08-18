@@ -120,6 +120,7 @@ class OverlayManager(private val context: Context) {
         var outerRadius: Float = 120f,
         var isStick: Boolean = false,
         var turbo: Boolean = false,
+        var overrideGame: Boolean = true,
         var deadZone: Float = 0.15f,
         // false = Move (position-based), true = Look/Camera (velocity/sweep-based)
         var lookMode: Boolean = false
@@ -423,9 +424,9 @@ class OverlayManager(private val context: Context) {
             val zid = entry.zoneId.ifBlank { UUID.randomUUID().toString() }
             when (val a = entry.action) {
                 is TouchAction.Tap ->
-                    editingZones.add(ZoneData(id = zid, inputName = entry.inputName, cx = a.x, cy = a.y, isStick = false, turbo = entry.turbo))
+                    editingZones.add(ZoneData(id = zid, inputName = entry.inputName, cx = a.x, cy = a.y, isStick = false, turbo = entry.turbo, overrideGame = entry.overrideGame))
                 is TouchAction.Drag ->
-                    editingZones.add(ZoneData(id = zid, inputName = entry.inputName, cx = a.centerX, cy = a.centerY, innerRadius = 50f, outerRadius = a.radius, isStick = true, turbo = false, deadZone = a.deadZone, lookMode = a.lookMode))
+                    editingZones.add(ZoneData(id = zid, inputName = entry.inputName, cx = a.centerX, cy = a.centerY, innerRadius = 50f, outerRadius = a.radius, isStick = true, turbo = false, deadZone = a.deadZone, lookMode = a.lookMode, overrideGame = entry.overrideGame))
             }
             if (entry.inputName == "LT" || entry.inputName == "RT")
                 ButtonTuningStore.initForTrigger(zid)
@@ -839,6 +840,7 @@ class OverlayManager(private val context: Context) {
                 else
                     TouchAction.Tap(zone.cx, zone.cy),
                 turbo = zone.turbo,
+                overrideGame = zone.overrideGame,
                 zoneId = zone.id
             )
         }
@@ -1198,6 +1200,16 @@ class OverlayManager(private val context: Context) {
             dismissContextMenu()
             rebuildZoneLayer()
         })
+
+        // OVERRIDE — assigned zones only. Off = game keeps its own mapping.
+        if (zone.inputName.isNotBlank()) {
+            val ovColor = if (zone.overrideGame) Color.parseColor("#00BFFF") else Color.parseColor("#555555")
+            buttons.add(BtnSpec("\u29C9", ovColor) {
+                zone.overrideGame = !zone.overrideGame
+                dismissContextMenu()
+                rebuildZoneLayer()
+            })
+        }
 
         // TURBO — button zones only, must be assigned
         if (!zone.isStick && zone.inputName.isNotBlank()) {
