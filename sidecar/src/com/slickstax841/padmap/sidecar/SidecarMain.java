@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Shell-uid injector started via app_process after wireless ADB pairing.
+ * Shell-uid injector started via app_process (Magisk su, or wireless ADB).
  * Speaks a tiny binary protocol on 127.0.0.1 so the PadMap app never calls
  * injectInputEvent itself.
  *

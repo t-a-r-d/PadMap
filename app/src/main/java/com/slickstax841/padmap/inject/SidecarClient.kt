@@ -12,7 +12,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 object SidecarClient {
 
     const val PORT = 18741
-    const val TOKEN = "padmap-sidecar"
+
+    /** Per-install token set by SidecarHost before ping/start. */
+    @Volatile
+    var authToken: String = ""
 
     private const val CMD_PING: Byte = 0x50
     private const val CMD_DOWN: Byte = 0x44
@@ -103,7 +106,7 @@ object SidecarClient {
             s.soTimeout = 1500
             val out = DataOutputStream(s.getOutputStream())
             val inp = DataInputStream(s.getInputStream())
-            out.write(TOKEN.toByteArray())
+            out.write(authToken.toByteArray())
             out.flush()
             if (inp.readByte().toInt() != 0) {
                 lastError = "sidecar rejected token"

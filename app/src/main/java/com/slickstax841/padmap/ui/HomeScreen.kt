@@ -153,6 +153,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     Toast.makeText(ctx, "Accessibility service enabled", Toast.LENGTH_SHORT).show()
                 hasOverlay = newOverlay
                 hasA11y = newA11y
+                SidecarHost.bindClient(ctx)
                 hasInjector = SidecarClient.ping()
                 OverlayManager.instance?.repositionForHome()
                 scanAndSaveController()
@@ -237,10 +238,14 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     Spacer(Modifier.height(6.dp))
                     PermCard(
                         label = injectorNote,
-                        instructions = if (!SidecarHost.hasPaired(ctx))
-                            "First time: Settings \u2192 OPEN DEVELOPER. Stay on Pair with pairing code and use the top bar."
-                        else
-                            "PadMap already paired. If Wireless debugging is on and this still shows, tap here — Oppo often hides the AOSP flag. Settings shows the real error."
+                        instructions = when {
+                            SidecarHost.hasSu() ->
+                                "Allow PadMap in Magisk when asked, then return here. No Wi-Fi."
+                            !SidecarHost.hasPaired(ctx) ->
+                                "First time: Settings \u2192 OPEN DEVELOPER. Stay on Pair with pairing code and use the top bar."
+                            else ->
+                                "PadMap already paired. If Wireless debugging is on and this still shows, tap here — Oppo often hides the AOSP flag. Settings shows the real error."
+                        }
                     ) { onSettings() }
                     Spacer(Modifier.height(8.dp))
                 }

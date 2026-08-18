@@ -4,11 +4,14 @@ import android.content.Context
 import android.provider.Settings
 import android.util.Base64
 import java.io.ByteArrayOutputStream
-import java.util.concurrent.TimeUnit
+import java.io.File
 import java.nio.charset.Charset
+import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 /**
- * Pairs wireless ADB, copies the sidecar jar to /data/local/tmp, and starts it as shell.
+ * Copies the sidecar jar to /data/local/tmp and starts it as shell (uid 2000).
+ * Prefers Magisk `su`. Wireless ADB is only used when no su binary is present.
  */
 object SidecarHost {
 
@@ -16,6 +19,11 @@ object SidecarHost {
     private const val KEY_PAIRED = "paired"
     private const val KEY_HOST = "last_host"
     private const val KEY_PORT = "last_port"
+    private const val KEY_TOKEN = "auth_token"
+    private const val REMOTE_JAR = "/data/local/tmp/padmap-sidecar.jar"
+    private const val REMOTE_SH = "/data/local/tmp/padmap-start.sh"
+    private const val REMOTE_PID = "/data/local/tmp/padmap-sidecar.pid"
+    private const val REMOTE_LOG = "/data/local/tmp/padmap-sidecar.log"
 
     @Volatile
     var status: String = "Injector not started"
@@ -37,6 +45,37 @@ object SidecarHost {
         return context.getSharedPreferences(PREFS, 0).getBoolean(KEY_PAIRED, false)
     }
 
+    fun suPath(): String? {
+        val paths = listOf(
+            "/debug_ramdisk/su",
+            "/system/xbin/su",
+            "/system/bin/su",
+            "/sbin/su",
+            "/system/sbin/su",
+            "/vendor/bin/su"
+        )
+        return paths.firstOrNull { p ->
+            val f = File(p)
+            f.exists() && f.canExecute()
+        }
+    }
+
+    fun hasSu(): Boolean = suPath() != null
+
+    fun bindClient(context: Context) {
+        SidecarClient.authToken = installToken(context)
+    }
+
+    private fun installToken(context: Context): String {
+        val p = prefs(context)
+        var t = p.getString(KEY_TOKEN, null)
+        if (t.isNullOrBlank() || t.any { !it.isLetterOrDigit() }) {
+            t = UUID.randomUUID().toString().replace("-", "")
+            p.edit().putString(KEY_TOKEN, t).apply()
+        }
+        return t
+    }
+
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, 0)
 
     private fun markPaired(context: Context) {
@@ -55,24 +94,38 @@ object SidecarHost {
     }
 
     /**
-     * After the first pairing, reconnects and starts the sidecar.
-     * Does not require the AOSP adb_wifi_enabled flag — Oppo often leaves that at 0.
+     * Starts the sidecar via Magisk when `su` exists. Otherwise reconnects wireless ADB
+     * after the first pairing. Does not require the AOSP adb_wifi_enabled flag —
+     * Oppo often leaves that at 0.
      */
     fun ensureRunning(context: Context, force: Boolean = false): Boolean {
+        bindClient(context)
         if (SidecarClient.ping()) {
             status = "Injector running"
             dropAdb(context)
             return true
         }
+        if (inProgress) return false
+        val su = suPath()
+        val now = System.currentTimeMillis()
+        if (su != null) {
+            if (!force && now - lastAttemptMs < 3000L) return false
+            lastAttemptMs = now
+            inProgress = true
+            try {
+                return startViaRoot(context, su)
+            } finally {
+                inProgress = false
+                lastAttemptMs = System.currentTimeMillis()
+            }
+        }
         if (!hasPaired(context)) {
             status = "First-time pair needed"
             return false
         }
-        if (inProgress) return false
         // ColorOS's "Wireless debugging connected" toast resumes Home, which used
         // to call this again and disconnect/reconnect forever.
         if (!force && autoTriedThisProcess) return false
-        val now = System.currentTimeMillis()
         if (!force && now - lastAttemptMs < 20_000L) {
             return false
         }
@@ -131,6 +184,7 @@ object SidecarHost {
     }
 
     fun start(context: Context, connectHost: String, connectPort: Int) {
+        bindClient(context)
         status = "Connecting ADB…"
         val mgr = PadMapAdbManager.get(context)
         mgr.setTimeout(8, TimeUnit.SECONDS)
@@ -141,7 +195,7 @@ object SidecarHost {
             throw IllegalStateException("ADB connect failed on $connectHost:$connectPort")
         }
         saveEndpoint(context, AdbEndpoint(connectHost, connectPort))
-        val remote = "/data/local/tmp/padmap-sidecar.jar"
+        val remote = REMOTE_JAR
         status = "Installing injector…"
         // Do not cp from /storage/emulated/0 — ColorOS FUSE often never returns.
         val jar = readAssetJar(context)
@@ -151,16 +205,115 @@ object SidecarHost {
             throw IllegalStateException("Injector copy failed (phone has $copied bytes, expected ${jar.size})")
         }
         shell(mgr, "chmod 644 $remote")
-        shell(mgr, "kill \$(cat /data/local/tmp/padmap-sidecar.pid) 2>/dev/null; true")
+        shell(mgr, "kill \$(cat $REMOTE_PID) 2>/dev/null; true")
         status = "Starting injector…"
         launchDetached(mgr, remote)
         if (!waitForPing(4000)) {
-            val log = runCatching { shell(mgr, "cat /data/local/tmp/padmap-sidecar.log") }.getOrDefault("").trim()
+            val log = runCatching { shell(mgr, "cat $REMOTE_LOG") }.getOrDefault("").trim()
             val detail = log.ifBlank { "no sidecar log — process never stayed up" }
             throw IllegalStateException("Sidecar did not start. ${SidecarClient.lastError}. $detail")
         }
         status = "Injector running"
         dropAdb(context)
+    }
+
+    /**
+     * Root only copies the jar and launches the existing sidecar as shell (uid 2000).
+     * The sidecar process is not uid 0.
+     */
+    private fun startViaRoot(context: Context, su: String): Boolean {
+        status = "Asking Magisk for root…"
+        val id = execSu(su, null, "id", 20_000)
+        if (id.first == -1 && !id.second.contains("uid=0")) {
+            status = "No Magisk response. If it is installed, Allow PadMap, then return here"
+            return false
+        }
+        if (id.first != 0 || !id.second.contains("uid=0")) {
+            status = "Root denied. Allow PadMap in Magisk, then return here"
+            return false
+        }
+        status = "Installing injector…"
+        val jar = readAssetJar(context)
+        val localJar = File(context.cacheDir, "padmap-sidecar.jar")
+        val localSh = File(context.cacheDir, "padmap-start.sh")
+        if (localJar.absolutePath.any { it == '\'' } || localSh.absolutePath.any { it == '\'' }) {
+            throw IllegalStateException("Unexpected cache path")
+        }
+        localJar.writeBytes(jar)
+        localSh.writeText(startScript(installToken(context)))
+        val install = execSu(
+            su,
+            null,
+            "cp '${localJar.absolutePath}' $REMOTE_JAR && " +
+                "cp '${localSh.absolutePath}' $REMOTE_SH && " +
+                "chmod 644 $REMOTE_JAR && chmod 755 $REMOTE_SH && " +
+                "wc -c < $REMOTE_JAR",
+            15_000
+        )
+        val copied = install.second.filter { it.isDigit() }.toIntOrNull()
+        if (install.first != 0 || copied != jar.size) {
+            throw IllegalStateException("Injector copy failed (phone has $copied bytes, expected ${jar.size})")
+        }
+        execSu(su, null, "kill \$(cat $REMOTE_PID) 2>/dev/null; true", 3_000)
+        status = "Starting injector…"
+        val launchCmds = listOf(
+            "setsid -f $REMOTE_SH </dev/null >$REMOTE_LOG 2>&1",
+            "nohup $REMOTE_SH </dev/null >$REMOTE_LOG 2>&1 &"
+        )
+        for (uid in listOf("2000", "shell")) {
+            for (cmd in launchCmds) {
+                execSu(su, uid, cmd, 2_000)
+                if (waitForPing(2_500)) {
+                    status = "Injector running"
+                    return true
+                }
+            }
+        }
+        val log = execSu(su, null, "cat $REMOTE_LOG", 2_000).second.trim()
+        val detail = log.ifBlank { "no sidecar log — process never stayed up" }
+        throw IllegalStateException("Sidecar did not start as shell. ${SidecarClient.lastError}. $detail")
+    }
+
+    private fun startScript(token: String): String {
+        return """
+            #!/system/bin/sh
+            BIN=/system/bin/app_process64
+            if [ ! -x ${'$'}BIN ]; then BIN=/system/bin/app_process; fi
+            if [ ! -x ${'$'}BIN ]; then BIN=app_process64; fi
+            CLASSPATH=$REMOTE_JAR exec ${'$'}BIN /data/local/tmp --nice-name=padmap_sidecar com.slickstax841.padmap.sidecar.SidecarMain ${SidecarClient.PORT} $token
+        """.trimIndent() + "\n"
+    }
+
+    private fun execSu(su: String, uid: String?, command: String, timeoutMs: Long): Pair<Int, String> {
+        val args = if (uid != null) arrayOf(su, uid, "-c", command) else arrayOf(su, "-c", command)
+        val p = ProcessBuilder(*args).redirectErrorStream(true).start()
+        val acc = ByteArrayOutputStream()
+        val buf = ByteArray(4096)
+        val inp = p.inputStream
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val avail = runCatching { inp.available() }.getOrDefault(0)
+            if (avail > 0) {
+                val n = inp.read(buf)
+                if (n < 0) break
+                if (n > 0) acc.write(buf, 0, n)
+            } else {
+                try {
+                    val code = p.exitValue()
+                    while (true) {
+                        val n = inp.read(buf)
+                        if (n <= 0) break
+                        acc.write(buf, 0, n)
+                    }
+                    return code to acc.toString(Charset.forName("UTF-8").name())
+                } catch (_: IllegalThreadStateException) {
+                    Thread.sleep(40)
+                }
+            }
+        }
+        p.destroy()
+        runCatching { p.destroyForcibly() }
+        return -1 to acc.toString(Charset.forName("UTF-8").name())
     }
 
     /** Sidecar stays up on localhost. Holding ADB open retriggers ColorOS toasts and resumes. */
@@ -171,8 +324,8 @@ object SidecarHost {
     /** New session so closing the ADB stream does not SIGHUP the injector. */
     private fun launchDetached(mgr: PadMapAdbManager, remote: String) {
         val cls = "com.slickstax841.padmap.sidecar.SidecarMain"
-        val args = "$cls ${SidecarClient.PORT} ${SidecarClient.TOKEN}"
-        val log = "/data/local/tmp/padmap-sidecar.log"
+        val args = "$cls ${SidecarClient.PORT} ${SidecarClient.authToken}"
+        val log = REMOTE_LOG
         val run = { bin: String ->
             "CLASSPATH=$remote $bin /data/local/tmp --nice-name=padmap_sidecar $args"
         }
