@@ -88,6 +88,7 @@ private fun InjectorCard(skin: AppSkin) {
     val statusText = if (running) "Injector running" else SidecarHost.status
 
     fun openDeveloper() {
+        if (!paired) PairOverlay.show(ctx)
         ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         })
@@ -117,7 +118,7 @@ private fun InjectorCard(skin: AppSkin) {
             if (paired)
                 "Already paired. Turn on Wireless debugging (Developer options) and tap START. No code after the first time."
             else
-                "Android closes the pair screen if you leave it. Tap SHOW PAIR PAD first, then open Pair with pairing code and type the 6 digits on the floating pad.",
+                "OPEN DEVELOPER puts a bar at the top. Open Pair with pairing code and stay there. Tap the bar fields — keyboard comes from the bottom. Submit.",
             fontSize = 12.sp, color = skin.textSecondary, fontFamily = skin.labelFont
         )
         if (!paired) {

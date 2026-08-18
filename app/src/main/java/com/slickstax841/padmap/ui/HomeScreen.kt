@@ -235,7 +235,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                         instructions = if (SidecarHost.hasPaired(ctx))
                             "Developer options \u2192 Wireless debugging ON, then return here. PadMap starts the injector itself. No code."
                         else
-                            "First time only: Settings \u2192 SHOW PAIR PAD, then open Pair with pairing code and type the 6 digits on the floating pad. Leaving that Android screen kills the code."
+                            "First time only: Settings \u2192 OPEN DEVELOPER. A bar stays at the top. Open Pair with pairing code, type into that bar, Submit."
                     ) { onSettings() }
                     Spacer(Modifier.height(8.dp))
                 }
