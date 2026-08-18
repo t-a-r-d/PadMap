@@ -76,6 +76,16 @@ class OverlayManager(private val context: Context) {
         PixelFormat.TRANSLUCENT
     ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; x = 0; y = -1 }
 
+    // Full-screen, not touchable: gamepad keys/sticks land here, finger touches go to the game.
+    private var playCatcher: View? = null
+    private val playParams = WindowManager.LayoutParams(
+        WindowManager.LayoutParams.MATCH_PARENT,
+        WindowManager.LayoutParams.MATCH_PARENT,
+        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+        PixelFormat.TRANSLUCENT
+    )
+
     // ─── Config overlay ───────────────────────────────────────────────────────
 
     private var configRoot: FrameLayout? = null
@@ -174,7 +184,10 @@ class OverlayManager(private val context: Context) {
 
     // PadMap Home is not a game — hide the overlay button.
     fun repositionForHome() {
-        handler.post { iconView?.visibility = View.GONE }
+        handler.post {
+            iconView?.visibility = View.GONE
+            hidePlayCatcher()
+        }
     }
 
     // Move icon to top-center (game is foreground); re-assert config overlay focus if open.
@@ -190,10 +203,12 @@ class OverlayManager(private val context: Context) {
             val view = iconView ?: return@post
             if (!com.slickstax841.padmap.data.GameScanner.isInstalledGame(context, pkg)) {
                 view.visibility = View.GONE
+                hidePlayCatcher()
                 return@post
             }
             view.visibility = View.VISIBLE
             pinIconTopCenter(apply = true)
+            showPlayCatcher()
         }
     }
 
@@ -209,7 +224,7 @@ class OverlayManager(private val context: Context) {
     // Open config overlay directly from HomeScreen — uses last known foreground package
     fun openConfigDirect() { handler.post { enterConfigModeFromIcon() } }
 
-    fun detach() { handler.post { removeIcon(); removeConfig(); removeAllDebugViews() } }
+    fun detach() { handler.post { hidePlayCatcher(); removeIcon(); removeConfig(); removeAllDebugViews() } }
 
     fun showToast(msg: String) {
         handler.post { Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
@@ -381,6 +396,7 @@ class OverlayManager(private val context: Context) {
 
     private fun enterConfigMode() {
         state = State.CONFIG
+        hidePlayCatcher()
         iconView?.visibility = View.GONE
         buildConfigOverlay()
         PadMapAccessibilityService.instance?.updateInputInterception()
@@ -403,7 +419,10 @@ class OverlayManager(private val context: Context) {
             iconView?.visibility = View.VISIBLE
             PadMapAccessibilityService.instance?.restoreGamePackage(gamePackage)
             PadMapAccessibilityService.instance?.updateInputInterception()
-            configGamePackage = ""  // guard window closed — normal a11y tracking resumes
+            configGamePackage = ""
+            if (gamePackage.isNotBlank() &&
+                com.slickstax841.padmap.data.GameScanner.isInstalledGame(context, gamePackage)
+            ) showPlayCatcher()
         }
     }
 
@@ -1319,6 +1338,70 @@ class OverlayManager(private val context: Context) {
     private fun dismissTuningBox() {
         tuningBoxView?.let { zoneLayer?.removeView(it) }
         tuningBoxView = null
+    }
+
+    private fun showPlayCatcher() {
+        if (state == State.CONFIG) return
+        playCatcher?.let {
+            it.post { it.requestFocus() }
+            return
+        }
+        val v = PlaybackCatcherView(context)
+        playCatcher = v
+        try {
+            wm.addView(v, playParams)
+            v.post {
+                v.requestFocus()
+                PlaybackDebug.log("play catcher focused=${v.hasFocus()}")
+            }
+        } catch (e: Exception) {
+            playCatcher = null
+            PlaybackDebug.log("play catcher add failed ${e.message}")
+        }
+    }
+
+    private fun hidePlayCatcher() {
+        playCatcher?.let { runCatching { wm.removeView(it) } }
+        playCatcher = null
+    }
+
+    private class PlaybackCatcherView(ctx: Context) : View(ctx) {
+        init {
+            isFocusable = true
+            isFocusableInTouchMode = true
+        }
+
+        override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+            if (event.source and InputDevice.SOURCE_GAMEPAD == 0 &&
+                event.source and InputDevice.SOURCE_JOYSTICK == 0) {
+                return super.onKeyDown(keyCode, event)
+            }
+            if (event.repeatCount == 0) {
+                PlaybackDebug.log("catcher key $keyCode")
+                PadMapAccessibilityService.instance?.handlePlaybackDown(keyCode)
+            }
+            return true
+        }
+
+        override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+            if (event.source and InputDevice.SOURCE_GAMEPAD == 0 &&
+                event.source and InputDevice.SOURCE_JOYSTICK == 0) {
+                return super.onKeyUp(keyCode, event)
+            }
+            PadMapAccessibilityService.instance?.handlePlaybackUp(keyCode)
+            return true
+        }
+
+        override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+            val isPad = event.source and InputDevice.SOURCE_JOYSTICK != 0 ||
+                event.source and InputDevice.SOURCE_GAMEPAD != 0
+            if (!isPad || event.action != MotionEvent.ACTION_MOVE) {
+                return super.dispatchGenericMotionEvent(event)
+            }
+            PlaybackDebug.logMotion("catcher motion")
+            PadMapAccessibilityService.instance?.handlePlaybackMotion(event)
+            return true
+        }
     }
 
     // ─── Key/axis catcher — receives controller input while config overlay is focused ──

@@ -90,6 +90,7 @@ Not confirmed on device. Code paths that drop playback:
 
 - [in progress] Always request key filter + joystick/gamepad motion. If the active layout already has mappings, bind it to the game instead of replacing it with an empty one. Prefer `IInputManager` for inject. Clear `padMapUiVisible` on activity stop.
 - [in progress] v64 still no touches. Overlay DEBUG + SHARE dumps injector ping, active layout/mappings, uiVisible, keyFilter, motionSources, and a live event log (why each press was skipped or injected).
+- [in progress] ColorOS may never send pad events to AccessibilityService. Add a full-screen `FLAG_NOT_TOUCHABLE` focusable overlay on games that receives keys/motion and feeds playback. Touches still go to the game.
 
 ### Not tried
 
