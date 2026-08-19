@@ -182,6 +182,27 @@ Tapping a stick zone should open its options from the centre and from the ring b
 
 ---
 
+## BUG-013 — Overlay home SAVE clipped on the panel edge
+
+**Status:** in progress
+**Reported:** 2026-08-19 on PadMap v71
+
+The overlay home card clips SAVE on the right edge. ADJUST, DEBUG, CLEAR, SAVE do not have equal gaps.
+
+### Cause
+
+`buildTopPanel` sets `minimumWidth = 200dp` and the button row is `MATCH_PARENT` with a weight-1 spacer after DEBUG. The card stays ~200dp plus padding; leftover width after ADJUST + DEBUG is too small, so SAVE is clipped.
+
+### Attempts
+
+- [in progress] Drop the 200dp floor. Button row `WRAP_CONTENT` with equal 8dp gaps and no weight spacer so the card grows to ADJUST, DEBUG, CLEAR, SAVE.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-011 — Look-stick pan is jittery; SPD shown as px; no invert-Y
 
 **Status:** in progress

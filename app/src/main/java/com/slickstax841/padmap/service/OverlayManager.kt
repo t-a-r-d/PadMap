@@ -717,7 +717,6 @@ class OverlayManager(private val context: Context) {
         // Compact vertical card — centred on screen, draggable from the title area
         val panel = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            minimumWidth = dp(200)
             background = GradientDrawable().apply {
                 setColor(Color.argb(166, 0, 0, 0))
                 cornerRadius = dp(10).toFloat()
@@ -813,12 +812,12 @@ class OverlayManager(private val context: Context) {
         panel.addView(layerRow)
         panel.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(1, dp(8)) })
 
-        // Button row
+        // Button row — WRAP_CONTENT so the card grows to fit all four actions
         val btnRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         }
@@ -828,7 +827,7 @@ class OverlayManager(private val context: Context) {
             setOnClickListener { enterAdjustMode() }
             layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
         })
-        btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(dp(6), 1) })
+        btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(dp(8), 1) })
         btnRow.addView(TextView(context).apply {
             text = "DEBUG"
             textSize = 11f
@@ -837,8 +836,7 @@ class OverlayManager(private val context: Context) {
             background = outlineDrawable(Color.parseColor("#00BFFF"))
             setOnClickListener { toggleDebugBox() }
         })
-        btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(dp(16), 1) })
-        btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+        btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(dp(8), 1) })
         // CLEAR
         btnRow.addView(TextView(context).apply {
             text = "CLEAR"
@@ -848,7 +846,7 @@ class OverlayManager(private val context: Context) {
             background = outlineDrawable(Color.parseColor("#CC3333"))
             setOnClickListener { clearAllZones() }
         })
-        btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(dp(6), 1) })
+        btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(dp(8), 1) })
         // SAVE
         btnRow.addView(TextView(context).apply {
             text = "SAVE"
