@@ -224,6 +224,27 @@ Button options should size the zone with a scrubber on an arc from 8 o’clock (
 
 ---
 
+## BUG-021 — Options disc small; zones hard to drag; sticks judder / app quits
+
+**Status:** in progress
+**Reported:** 2026-08-19
+
+Options ring is too small. Zones should drag to a new place. Move + look together judder; many buttons or both sticks can quit the app.
+
+### Cause
+
+Disc is 100dp; zone drag waits 20dp so a pull often opens the menu instead. Look recycle does sync `pointerUp`/`pointerDown` on the tick thread while move is still down — that hitchs the other finger and can block main long enough for the service to be killed. Ten live pointers plus look recycle can also blow the inject stream.
+
+### Attempts
+
+- [in progress] Larger disc. Drag slop 8dp (none while selected). Look wraps with MOVE when another pointer is down. Cap live pointers so inject does not overflow.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-020 — Turbo belongs on the options ring; home overlaps the cluster
 
 **Status:** in progress

@@ -42,6 +42,8 @@ class PadMapAccessibilityService : AccessibilityService() {
         private const val STICK_TICK_MS = 16L
         private const val STICK_RELEASE_TICKS = 8
         private const val LOOK_RELEASE_TICKS = 20
+        // Leave headroom under sidecar MAX_POINTERS (10) so a look wrap or extra tap cannot overflow.
+        private const val MAX_LIVE_POINTERS = 8
         private val DEFAULT_AXES = mapOf(
             MotionEvent.AXIS_X to "L-Stick X",
             MotionEvent.AXIS_Y to "L-Stick Y",
@@ -111,6 +113,9 @@ class PadMapAccessibilityService : AccessibilityService() {
     private fun freePointer(id: Int) {
         if (id >= 0 && !freePointerIds.contains(id)) freePointerIds.addFirst(id)
     }
+
+    private fun livePointerCount(): Int =
+        activeHolds.values.sumOf { it.pointerIds.size } + activeSticks.size + turboDown.size
 
     private fun turboKey(entry: MappingEntry) = entry.zoneId.ifBlank { entry.inputName }
 
@@ -625,6 +630,10 @@ class PadMapAccessibilityService : AccessibilityService() {
     private fun startHold(label: String, entries: List<MappingEntry>) {
         if (entries.isEmpty() || !sidecarReady()) return
         interruptTurboTaps()
+        if (livePointerCount() + entries.size > MAX_LIVE_POINTERS) {
+            PlaybackDebug.log("down $label cap")
+            return
+        }
         activeHolds.remove(label)?.let { old ->
             old.pointerIds.forEach { pid ->
                 SidecarClient.pointerUp(pid)
@@ -748,6 +757,10 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     private fun startStick(label: String, drag: TouchAction.Drag) {
         if (activeSticks.containsKey(label) || !sidecarReady()) return
+        if (livePointerCount() >= MAX_LIVE_POINTERS) {
+            PlaybackDebug.log("stick $label cap")
+            return
+        }
         val pid = allocPointer() ?: run {
             PlaybackDebug.log("stick $label no pid")
             return
@@ -763,6 +776,14 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     private fun tickSticks() {
         if (activeSticks.isEmpty()) return
+        try {
+            tickSticksInner()
+        } catch (t: Throwable) {
+            PlaybackDebug.log("stick tick ${t.javaClass.simpleName}")
+        }
+    }
+
+    private fun tickSticksInner() {
         val updates = mutableMapOf<Int, Pair<Float, Float>>()
         val toRelease = mutableListOf<String>()
         for ((label, state) in activeSticks.toMap()) {
@@ -790,8 +811,8 @@ class PadMapAccessibilityService : AccessibilityService() {
             stickDeadTicks[label] = 0
             setWalkTapping(label, true)
             if (state.lookMode) {
-                state.filtX += (sx - state.filtX) * 0.55f
-                state.filtY += (lookY - state.filtY) * 0.55f
+                state.filtX += (sx - state.filtX) * 0.42f
+                state.filtY += (lookY - state.filtY) * 0.42f
                 val now = android.os.SystemClock.uptimeMillis()
                 val dt = if (state.lastTickMs == 0L) 0.016f
                     else ((now - state.lastTickMs).coerceIn(4L, 32L)) / 1000f
@@ -800,17 +821,22 @@ class PadMapAccessibilityService : AccessibilityService() {
                 var nx = state.currentX + state.filtX * step
                 var ny = state.currentY + state.filtY * step
                 val dm = resources.displayMetrics
-                val margin = 24f
+                val margin = 32f
                 val oob = nx < margin || ny < margin ||
                     nx > dm.widthPixels - margin || ny > dm.heightPixels - margin
                 if (oob) {
                     val fm = sqrt(state.filtX * state.filtX + state.filtY * state.filtY)
                         .coerceAtLeast(0.01f)
-                    SidecarClient.pointerUp(state.pointerId)
                     val ox = state.drag.centerX + state.filtX / fm * 16f
                     val oy = state.drag.centerY + state.filtY / fm * 16f
-                    OverlayManager.instance?.noteInject(ox, oy)
-                    SidecarClient.pointerDown(state.pointerId, ox, oy)
+                    // UP/DOWN while move (or a hold) is down hitchs the other finger and can
+                    // stall the main thread on sidecar I/O. Warp with MOVE instead.
+                    val others = activeSticks.size > 1 || activeHolds.isNotEmpty() || turboDown.isNotEmpty()
+                    if (!others) {
+                        SidecarClient.pointerUp(state.pointerId)
+                        OverlayManager.instance?.noteInject(ox, oy)
+                        SidecarClient.pointerDown(state.pointerId, ox, oy)
+                    }
                     nx = ox + state.filtX * step
                     ny = oy + state.filtY * step
                 }

@@ -1319,16 +1319,16 @@ class OverlayManager(private val context: Context) {
             })
         }
 
-        val btnSize = dp(30)
-        val discSize = dp(100)
-        val orbit = discSize / 2f - btnSize / 2f - dp(5)
+        val btnSize = dp(38)
+        val discSize = dp(148)
+        val orbit = discSize / 2f - btnSize / 2f - dp(8)
         val showSize = !zone.isStick && zone.isPlaced
-        val trackPad = if (showSize) dp(36) else 0
+        val trackPad = if (showSize) dp(40) else 0
         val clusterSize = discSize + trackPad * 2
 
         fun optionBtn(spec: BtnSpec) = TextView(context).apply {
             text = spec.icon
-            textSize = 13f
+            textSize = 16f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
@@ -1428,7 +1428,10 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun highlightZone(id: String?) {
-        zoneViews.forEach { (zid, v) -> v.setMenuActive(zid == id) }
+        zoneViews.forEach { (zid, v) ->
+            v.setMenuActive(zid == id)
+            if (zid == id) v.bringToFront()
+        }
     }
 
     private fun parkHomeAwayFrom(cluster: View) {
@@ -1885,7 +1888,8 @@ class OverlayManager(private val context: Context) {
                     val ddx = e.rawX - lastRawX; val ddy = e.rawY - lastRawY
                     when (dragMode) {
                         DragMode.MOVE -> {
-                            if (sqrt(ddx * ddx + ddy * ddy) < dp(20) && !menuHidden) {
+                            val slop = if (menuActive) 0 else dp(8)
+                            if (sqrt(ddx * ddx + ddy * ddy) < slop && !menuHidden) {
                                 lastRawX = e.rawX; lastRawY = e.rawY
                                 return true
                             }
