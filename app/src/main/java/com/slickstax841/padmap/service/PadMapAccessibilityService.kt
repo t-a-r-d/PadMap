@@ -71,6 +71,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     private val activeSticks = mutableMapOf<String, StickState>()
     private val activeHolds = mutableMapOf<String, HoldState>()
     private val turboJobs = mutableMapOf<String, Job>()
+    private val walkJobs = mutableMapOf<String, Job>()
     private val axisValues = mutableMapOf<String, Pair<Float, Float>>()
     private val hatState = mutableMapOf<String, Boolean>()
     private val stickDeadTicks = mutableMapOf<String, Int>()
@@ -81,7 +82,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     val activeStickCount: Int get() = activeSticks.size
     val isPlaybackBusy: Boolean
         get() = activeHolds.isNotEmpty() || activeSticks.isNotEmpty() ||
-            inFlightTaps > 0 || turboJobs.isNotEmpty()
+            inFlightTaps > 0 || turboJobs.isNotEmpty() || walkJobs.isNotEmpty()
 
     private var stickLoopRunning = false
     private var lastSidecarWarnMs = 0L
@@ -218,6 +219,8 @@ class PadMapAccessibilityService : AccessibilityService() {
     fun releaseAllPlayback() {
         turboJobs.values.forEach { it.cancel() }
         turboJobs.clear()
+        walkJobs.values.forEach { it.cancel() }
+        walkJobs.clear()
         activeHolds.keys.toList().forEach { releaseHold(it) }
         for (label in activeSticks.keys.toList()) {
             val state = activeSticks.remove(label) ?: continue
@@ -252,6 +255,8 @@ class PadMapAccessibilityService : AccessibilityService() {
         val next = n.coerceIn(1, 6)
         if (next == activeLayer) return
         activeHolds.keys.toList().forEach { releaseHold(it) }
+        walkJobs.values.forEach { it.cancel() }
+        walkJobs.clear()
         for (label in activeSticks.keys.toList()) {
             val state = activeSticks.remove(label) ?: continue
             SidecarClient.pointerUp(state.pointerId)
@@ -397,7 +402,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         val mapped = layout?.mappings.orEmpty().filter { it.inputName.isNotBlank() }
         val binds = layout?.resolvedBinds().orEmpty()
         val wantKeys = configOpen || (playingPackage.isNotBlank() && (
-            mapped.any { it.action is TouchAction.Tap } ||
+            mapped.any { it.action is TouchAction.Tap && it.parentZoneId.isBlank() } ||
                 binds.any { it.activateName.isNotBlank() || it.deactivateName.isNotBlank() }
             ))
         val wantStick = configOpen || (playingPackage.isNotBlank() &&
@@ -650,6 +655,43 @@ class PadMapAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun walkTapsFor(label: String): List<MappingEntry> {
+        val layout = DataStore.activeLayout ?: return emptyList()
+        val mappings = layerMappings(layout)
+        val stick = mappings.firstOrNull { it.inputName == label && it.action is TouchAction.Drag }
+            ?: return emptyList()
+        val sid = stick.zoneId
+        if (sid.isBlank()) return emptyList()
+        return mappings.filter { it.parentZoneId == sid && it.action is TouchAction.Tap }
+    }
+
+    private fun setWalkTapping(label: String, on: Boolean) {
+        if (!on) {
+            if (walkJobs.remove(label)?.also { it.cancel() } != null) syncIconPassThrough()
+            return
+        }
+        val taps = walkTapsFor(label)
+        if (taps.isEmpty()) {
+            walkJobs.remove(label)?.cancel()
+            return
+        }
+        if (walkJobs[label]?.isActive == true) return
+        walkJobs[label] = scope.launch {
+            while (isActive) {
+                val captured = walkTapsFor(label)
+                if (captured.isEmpty()) break
+                val interval = captured.firstOrNull()
+                    ?.let { ButtonTuningStore.get(it.zoneId).repeatIntervalMs }
+                    ?: TURBO_INTERVAL_MS
+                mainHandler.post { fireTaps(captured) }
+                delay(interval.coerceAtLeast(40L))
+            }
+            walkJobs.remove(label)
+            mainHandler.post { syncIconPassThrough() }
+        }
+        syncIconPassThrough()
+    }
+
     private fun startStick(label: String, drag: TouchAction.Drag) {
         if (activeSticks.containsKey(label) || !sidecarReady()) return
         val pid = allocPointer() ?: run {
@@ -679,6 +721,7 @@ class PadMapAccessibilityService : AccessibilityService() {
             val scale = tuning.sensitivityPct
             val lookY = if (tuning.invertY) -sy else sy
             if (mag < 0.01f) {
+                setWalkTapping(label, false)
                 val n = (stickDeadTicks[label] ?: 0) + 1
                 stickDeadTicks[label] = n
                 val need = if (state.lookMode) LOOK_RELEASE_TICKS else STICK_RELEASE_TICKS
@@ -691,6 +734,7 @@ class PadMapAccessibilityService : AccessibilityService() {
                 continue
             }
             stickDeadTicks[label] = 0
+            setWalkTapping(label, true)
             if (state.lookMode) {
                 state.filtX += (sx - state.filtX) * 0.55f
                 state.filtY += (lookY - state.filtY) * 0.55f

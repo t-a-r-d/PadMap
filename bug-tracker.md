@@ -203,6 +203,27 @@ The overlay home card clips SAVE on the right edge. ADJUST, DEBUG, CLEAR, SAVE d
 
 ---
 
+## BUG-016 — Stick needs a toggleable walk-tap zone; drop COPY
+
+**Status:** in progress
+**Reported:** 2026-08-19
+
+Stick options should add/remove a button-style zone that repeat-taps while that stick is moved. COPY on button options is unused — make a new zone the usual way.
+
+### Cause
+
+No parent-linked tap mapping. `showContextMenu` still has COPY. Playback only tap-repeats from button turbo jobs.
+
+### Attempts
+
+- [in progress] Stick option ↻ creates a `parentZoneId` tap zone (move/size/tune like a button). Stick deflection starts the same repeat-tap path; centre/release stops it. COPY removed.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-015 — Overlay adjust edges move the whole window; centre is orange
 
 **Status:** in progress

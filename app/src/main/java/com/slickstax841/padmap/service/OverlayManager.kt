@@ -132,8 +132,12 @@ class OverlayManager(private val context: Context) {
         var deadZone: Float = 0.15f,
         // false = Move (position-based), true = Look/Camera (velocity/sweep-based)
         var lookMode: Boolean = false,
-        var layer: Int = 1
-    )
+        var layer: Int = 1,
+        var parentStickId: String = ""
+    ) {
+        val isWalkTap: Boolean get() = parentStickId.isNotBlank()
+        val isPlaced: Boolean get() = inputName.isNotBlank() || isWalkTap
+    }
 
     private var editingLayer = 1
 
@@ -364,6 +368,7 @@ class OverlayManager(private val context: Context) {
     fun assignPendingZone(inputName: String, isStick: Boolean) {
         val id = pendingZoneId ?: return
         val zone = editingZones.find { it.id == id } ?: return
+        if (zone.isWalkTap) return
 
         // Sticks: only 1 zone allowed per stick label
         if (isStick) {
@@ -382,6 +387,7 @@ class OverlayManager(private val context: Context) {
             hideDebugOverlay(zone.inputName)
         zone.inputName = inputName
         zone.isStick = isStick
+        if (!isStick) editingZones.removeAll { it.parentStickId == zone.id }
         if (inputName == "LT" || inputName == "RT") ButtonTuningStore.initForTrigger(zone.id)
         pendingZoneId = null
         handler.post {
@@ -531,7 +537,13 @@ class OverlayManager(private val context: Context) {
             val zid = entry.zoneId.ifBlank { UUID.randomUUID().toString() }
             when (val a = entry.action) {
                 is TouchAction.Tap ->
-                    editingZones.add(ZoneData(id = zid, inputName = entry.inputName, cx = a.x, cy = a.y, isStick = false, turbo = entry.turbo, innerRadius = a.radius, layer = entry.layer.coerceIn(1, 6)))
+                    editingZones.add(ZoneData(
+                        id = zid,
+                        inputName = if (entry.parentZoneId.isNotBlank()) "" else entry.inputName,
+                        cx = a.x, cy = a.y, isStick = false, turbo = entry.turbo,
+                        innerRadius = a.radius, layer = entry.layer.coerceIn(1, 6),
+                        parentStickId = entry.parentZoneId
+                    ))
                 is TouchAction.Drag ->
                     editingZones.add(ZoneData(id = zid, inputName = entry.inputName, cx = a.centerX, cy = a.centerY, innerRadius = 50f, outerRadius = a.radius, isStick = true, turbo = false, deadZone = a.deadZone, lookMode = a.lookMode, layer = entry.layer.coerceIn(1, 6)))
             }
@@ -607,7 +619,7 @@ class OverlayManager(private val context: Context) {
                         val dx = e.x - z.cx; val dy = e.y - z.cy
                         sqrt(dx * dx + dy * dy) < (if (z.isStick && z.inputName.isNotBlank()) z.outerRadius else z.innerRadius) + dp(20)
                     }
-                    val hasUnassigned = editingZones.any { it.layer == editingLayer && it.inputName.isBlank() }
+                    val hasUnassigned = editingZones.any { it.layer == editingLayer && !it.isPlaced }
                     if (!hitExisting && !hasUnassigned) createZone(e.x, e.y)
                     true
                 }
@@ -924,6 +936,27 @@ class OverlayManager(private val context: Context) {
         })
     }
 
+    private fun toggleStickWalkZone(stick: ZoneData) {
+        val existing = editingZones.find { it.parentStickId == stick.id }
+        if (existing != null) {
+            editingZones.removeAll { it.id == existing.id }
+            return
+        }
+        val r = DataStore.data.value.buttonZoneRadius.coerceAtLeast(16f)
+        val overlayW = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels).toFloat()
+        val overlayH = (configRoot?.height?.takeIf { it > 0 } ?: dm.heightPixels).toFloat()
+        val gap = stick.outerRadius + r + dp(24)
+        val right = stick.cx + gap
+        val cx = if (right + r <= overlayW) right else (stick.cx - gap).coerceIn(r, overlayW - r)
+        editingZones.add(ZoneData(
+            cx = cx,
+            cy = stick.cy.coerceIn(r, overlayH - r),
+            innerRadius = r,
+            layer = stick.layer,
+            parentStickId = stick.id
+        ))
+    }
+
     private fun bumpButtonSize(zone: ZoneData, delta: Float) {
         zone.innerRadius = (zone.innerRadius + delta).coerceIn(dp(16).toFloat(), dp(80).toFloat())
         DataStore.update { it.copy(buttonZoneRadius = zone.innerRadius) }
@@ -963,16 +996,17 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun saveAndExit() {
-        val mappings = editingZones.filter { it.inputName.isNotBlank() }.map { zone ->
+        val mappings = editingZones.filter { it.isPlaced }.map { zone ->
             MappingEntry(
-                inputName = zone.inputName,
+                inputName = if (zone.isWalkTap) "@walk" else zone.inputName,
                 action = if (zone.isStick)
                     TouchAction.Drag(zone.cx, zone.cy, zone.outerRadius, zone.deadZone, zone.lookMode)
                 else
                     TouchAction.Tap(zone.cx, zone.cy, zone.innerRadius),
                 turbo = zone.turbo,
                 zoneId = zone.id,
-                layer = zone.layer.coerceIn(1, 6)
+                layer = zone.layer.coerceIn(1, 6),
+                parentZoneId = zone.parentStickId
             )
         }
         DataStore.update { data ->
@@ -1228,7 +1262,7 @@ class OverlayManager(private val context: Context) {
         dismissContextMenu()
         // Make this zone live for reassignment — pressing any button/stick while the
         // context menu is open will reassign the zone to the new input.
-        pendingZoneId = zone.id
+        if (!zone.isWalkTap) pendingZoneId = zone.id
 
         // null onClick = drag handle (gets a touch listener instead of click listener)
         data class BtnSpec(val icon: String, val bgColor: Int, val onClick: (() -> Unit)?)
@@ -1237,24 +1271,13 @@ class OverlayManager(private val context: Context) {
         // DELETE — always present
         buttons.add(BtnSpec("\u2715", Color.parseColor("#CC3333")) {
             if (zone.isStick && zone.inputName.isNotBlank()) hideDebugOverlay(zone.inputName)
-            editingZones.removeAll { it.id == zone.id }
+            editingZones.removeAll { it.id == zone.id || it.parentStickId == zone.id }
             if (pendingZoneId == zone.id) pendingZoneId = null
             dismissContextMenu()
             rebuildZoneLayer()
         })
 
-        if (!zone.isStick && zone.inputName.isNotBlank()) {
-            buttons.add(BtnSpec("\u2398", Color.parseColor("#336699")) {
-                val copy = zone.copy(
-                    id = UUID.randomUUID().toString(),
-                    cx = (zone.cx + dp(40)).coerceAtMost(dm.widthPixels - zone.innerRadius),
-                    cy = (zone.cy + dp(40)).coerceAtMost(dm.heightPixels - zone.innerRadius)
-                )
-                editingZones.add(copy)
-                dismissContextMenu()
-                rebuildZoneLayer()
-                showContextMenu(copy)
-            })
+        if (!zone.isStick && zone.isPlaced) {
             buttons.add(BtnSpec("\u2212", Color.parseColor("#007A99")) {
                 bumpButtonSize(zone, -8f)
             })
@@ -1276,9 +1299,9 @@ class OverlayManager(private val context: Context) {
         }
 
         // TUNE — button zones only, must be assigned
-        if (!zone.isStick && zone.inputName.isNotBlank()) {
+        if (!zone.isStick && zone.isPlaced) {
             buttons.add(BtnSpec("\u2699", Color.parseColor("#007A99")) {
-                showTuningBox(zone.id, zone.inputName, zone.cx, zone.cy)
+                showTuningBox(zone.id, if (zone.isWalkTap) "WALK" else zone.inputName, zone.cx, zone.cy)
             })
         }
 
@@ -1286,6 +1309,12 @@ class OverlayManager(private val context: Context) {
         if (zone.isStick && zone.inputName.isNotBlank()) {
             buttons.add(BtnSpec("\u2699", Color.parseColor("#007A99")) {
                 showStickTuningBox(zone.id, zone.inputName, zone.cx, zone.cy)
+            })
+            val walkOn = editingZones.any { it.parentStickId == zone.id }
+            buttons.add(BtnSpec("\u21BB", if (walkOn) Color.parseColor("#FF8C00") else Color.parseColor("#336699")) {
+                toggleStickWalkZone(zone)
+                rebuildZoneLayer()
+                showContextMenu(zone)
             })
         }
 
@@ -1677,7 +1706,7 @@ class OverlayManager(private val context: Context) {
 
         override fun onDraw(canvas: Canvas) {
             val cx = width / 2f; val cy = height / 2f
-            if (zone.inputName.isBlank()) {
+            if (!zone.isPlaced) {
                 canvas.drawCircle(cx, cy, zone.innerRadius, pendingFill)
                 canvas.drawCircle(cx, cy, zone.innerRadius, dashPaint)
                 textPaint.textSize = zone.innerRadius * 0.65f
@@ -1710,7 +1739,11 @@ class OverlayManager(private val context: Context) {
                     drawBorderGlow(canvas, cx, cy, glowR)
                 }
                 // Stick zones show a joystick symbol; button zones show the button label
-                val displayText = if (zone.isStick) "\u2295" else zone.inputName
+                val displayText = when {
+                    zone.isStick -> "\u2295"
+                    zone.isWalkTap -> "WALK"
+                    else -> zone.inputName
+                }
                 textPaint.textSize = when {
                     zone.isStick -> zone.innerRadius * 0.85f
                     displayText.length > 4 -> zone.innerRadius * 0.45f
@@ -1780,7 +1813,7 @@ class OverlayManager(private val context: Context) {
                         contextMenuViews.forEach { it.visibility = View.VISIBLE }
                         menuHidden = false
                     }
-                    if (dragMode == DragMode.MOVE && zone.inputName.isNotBlank() && !dragged)
+                    if (dragMode == DragMode.MOVE && zone.isPlaced && !dragged)
                         onTap(zone)
                     dragMode = DragMode.NONE
                     return true
@@ -1966,6 +1999,8 @@ class OverlayManager(private val context: Context) {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = dp(8) }
         }
+        val walkTune = zone?.isWalkTap == true
+        if (!walkTune) {
         turboRow.addView(TextView(context).apply {
             text = "TURBO"
             textSize = 13f
@@ -1999,8 +2034,9 @@ class OverlayManager(private val context: Context) {
             })
         }
         container.addView(turboRow)
+        }
 
-        if (zone?.turbo == true) {
+        if (walkTune || zone?.turbo == true) {
             container.addView(stepperRow(
                 label = "DURATION",
                 getValue = { fmtMs(ButtonTuningStore.get(tuneZoneId).tapDurationMs) },

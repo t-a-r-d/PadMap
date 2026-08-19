@@ -42,7 +42,9 @@ data class MappingEntry(
     // Stable identifier for the zone this entry belongs to. Tuning is keyed by this ID,
     // not by inputName — so reassigning a zone to a different button preserves its tuning.
     val zoneId: String = "",
-    val layer: Int = 1
+    val layer: Int = 1,
+    // Non-blank: this tap is driven by that stick zone, not a pad button.
+    val parentZoneId: String = ""
 )
 
 @Serializable
