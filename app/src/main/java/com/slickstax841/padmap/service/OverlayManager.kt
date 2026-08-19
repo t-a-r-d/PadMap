@@ -1524,12 +1524,16 @@ class OverlayManager(private val context: Context) {
             })
         }
 
-        val btnSize = dp(38)
-        val discSize = dp(148)
-        val orbit = discSize / 2f - btnSize / 2f - dp(8)
+        // Zone-reposition handle orbits with the other actions; it stays put while the zone moves.
+        buttons.add(0, BtnSpec("\u2725", Color.parseColor("#336699"), null))
+
+        val moveSize = dp(52)
+        val btnSize = dp(36)
+        val btnOrbit = moveSize / 2f + btnSize / 2f + dp(8)
         val showSize = !zone.isStick && zone.isPlaced
-        val trackPad = if (showSize) dp(40) else 0
-        val clusterSize = discSize + trackPad * 2
+        val trackOrbit = btnOrbit + btnSize / 2f + dp(22)
+        val clusterSize = ((if (showSize) trackOrbit else btnOrbit) + dp(16)).toInt() * 2
+        val center = clusterSize / 2f
 
         fun optionBtn(spec: BtnSpec) = TextView(context).apply {
             text = spec.icon
@@ -1545,42 +1549,70 @@ class OverlayManager(private val context: Context) {
         }
 
         val cluster = FrameLayout(context).apply {
-            isClickable = true
+            isClickable = false
             elevation = 16f
         }
-        val disc = FrameLayout(context).apply {
-            isClickable = true
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.argb(200, 0, 0, 0))
-                setStroke(dp(2), Color.parseColor("#FF8C00"))
-            }
+        if (showSize) {
+            cluster.addView(
+                SizeScrubberView(context, zone, trackOrbit),
+                FrameLayout.LayoutParams(clusterSize, clusterSize)
+            )
         }
-        val mid = (discSize - btnSize) / 2
-        val moveBtn = optionBtn(BtnSpec("\u271B", Color.parseColor("#336699"), null))
-        disc.addView(moveBtn, FrameLayout.LayoutParams(btnSize, btnSize).apply {
-            leftMargin = mid
-            topMargin = mid
+        val menuMoveBtn = optionBtn(BtnSpec("\u271B", Color.parseColor("#336699"), null))
+        cluster.addView(menuMoveBtn, FrameLayout.LayoutParams(moveSize, moveSize).apply {
+            leftMargin = ((clusterSize - moveSize) / 2)
+            topMargin = ((clusterSize - moveSize) / 2)
         })
+        val nOrbit = buttons.size
         buttons.forEachIndexed { i, spec ->
-            // Start at 8 o'clock and go clockwise so two actions sit on the sides, not 12 and 6.
-            val angle = Math.toRadians(150.0) + 2.0 * Math.PI * i / buttons.size
-            val cx = discSize / 2f + cos(angle).toFloat() * orbit - btnSize / 2f
-            val cy = discSize / 2f + sin(angle).toFloat() * orbit - btnSize / 2f
-            disc.addView(optionBtn(spec), FrameLayout.LayoutParams(btnSize, btnSize).apply {
+            // 8 o'clock clockwise to 2 o'clock around the centre MOVE.
+            val deg = if (nOrbit == 1) 240.0 else 150.0 + 180.0 * i / (nOrbit - 1)
+            val ang = Math.toRadians(deg)
+            val cx = center + cos(ang).toFloat() * btnOrbit - btnSize / 2f
+            val cy = center + sin(ang).toFloat() * btnOrbit - btnSize / 2f
+            val btn = optionBtn(spec)
+            cluster.addView(btn, FrameLayout.LayoutParams(btnSize, btnSize).apply {
                 leftMargin = cx.toInt()
                 topMargin = cy.toInt()
             })
-        }
-        cluster.addView(disc, FrameLayout.LayoutParams(discSize, discSize).apply {
-            leftMargin = trackPad
-            topMargin = trackPad
-        })
-        if (showSize) {
-            cluster.addView(
-                SizeScrubberView(context, zone, discSize),
-                FrameLayout.LayoutParams(clusterSize, clusterSize)
-            )
+            if (i == 0) {
+                var zRawX = 0f
+                var zRawY = 0f
+                var zCx = 0f
+                var zCy = 0f
+                btn.setOnTouchListener { _, event ->
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            zRawX = event.rawX
+                            zRawY = event.rawY
+                            zCx = zone.cx
+                            zCy = zone.cy
+                            true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val r = if (zone.isStick && zone.inputName.isNotBlank())
+                                zone.outerRadius else zone.innerRadius
+                            val overlayW = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels).toFloat()
+                            val overlayH = (configRoot?.height?.takeIf { it > 0 } ?: dm.heightPixels).toFloat()
+                            zone.cx = (zCx + (event.rawX - zRawX)).coerceIn(r, overlayW - r)
+                            zone.cy = (zCy + (event.rawY - zRawY)).coerceIn(r, overlayH - r)
+                            val zv = zoneViews[zone.id]
+                            val zLp = zv?.layoutParams as? FrameLayout.LayoutParams
+                            if (zLp != null) {
+                                zLp.leftMargin = (zone.cx - zLp.width / 2f).toInt()
+                                zLp.topMargin = (zone.cy - zLp.height / 2f).toInt()
+                                zv.layoutParams = zLp
+                            }
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            persistZones()
+                            true
+                        }
+                        else -> false
+                    }
+                }
+            }
         }
 
         val overlayW = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels)
@@ -1602,7 +1634,7 @@ class OverlayManager(private val context: Context) {
         var dragStartRawY = 0f
         var dragStartX = 0
         var dragStartY = 0
-        moveBtn.setOnTouchListener { _, event ->
+        menuMoveBtn.setOnTouchListener { _, event ->
             val lp = cluster.layoutParams as? FrameLayout.LayoutParams ?: return@setOnTouchListener false
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -2186,18 +2218,17 @@ class OverlayManager(private val context: Context) {
         }
     }
 
-    // Arc from 8 o'clock (min) over the top to 2 o'clock (max). Canvas 0° = 3 o'clock, CW+.
+    // Arc from 7 o'clock (min) over the top to 3 o'clock (max). Canvas 0° = 3 o'clock, CW+.
     @SuppressLint("ViewConstructor")
     private inner class SizeScrubberView(
         ctx: Context,
         private val zone: ZoneData,
-        private val discPx: Int
+        private val orbitR: Float
     ) : View(ctx) {
         private val minR = dp(16).toFloat()
         private val maxR = dp(80).toFloat()
         private val thumbR = dp(9).toFloat()
         private val hit = dp(26).toFloat()
-        private val trackGap = dp(22).toFloat()
         private var dragging = false
         private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -2216,17 +2247,18 @@ class OverlayManager(private val context: Context) {
             color = Color.WHITE
         }
 
-        private fun trackRadius() = discPx / 2f + trackGap
+        private fun trackRadius() = orbitR
         private fun sizeToT() = ((zone.innerRadius - minR) / (maxR - minR)).coerceIn(0f, 1f)
-        private fun arcRad(t: Float) = Math.toRadians(150.0 - 180.0 * t.toDouble())
+        // 7 o'clock = 120°, clockwise 240° to 3 o'clock = 360°.
+        private fun arcRad(t: Float) = Math.toRadians(120.0 + 240.0 * t.toDouble())
 
-        // Map a finger vector to 0..1 on the top 8→2 arc (nearest endpoint if off-arc).
         private fun tFromFinger(dx: Float, dy: Float): Float {
             var deg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble()))
             if (deg < 0) deg += 360.0
-            if (deg in 150.0..330.0) return ((deg - 150.0) / 180.0).toFloat()
-            val dMax = if (deg > 330.0) deg - 330.0 else deg + 30.0
-            val dMin = if (deg < 150.0) 150.0 - deg else 510.0 - deg
+            if (deg == 0.0) deg = 360.0
+            if (deg in 120.0..360.0) return ((deg - 120.0) / 240.0).toFloat()
+            val dMin = if (deg < 120.0) 120.0 - deg else deg
+            val dMax = if (deg < 120.0) deg else 360.0 - deg
             return if (dMin <= dMax) 0f else 1f
         }
 
@@ -2252,7 +2284,7 @@ class OverlayManager(private val context: Context) {
             val cx = width / 2f
             val cy = height / 2f
             val r = trackRadius()
-            canvas.drawArc(cx - r, cy - r, cx + r, cy + r, 150f, -180f, false, trackPaint)
+            canvas.drawArc(cx - r, cy - r, cx + r, cy + r, 120f, 240f, false, trackPaint)
             val ang = arcRad(sizeToT())
             val tx = cx + cos(ang).toFloat() * r
             val ty = cy + sin(ang).toFloat() * r
