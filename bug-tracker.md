@@ -224,6 +224,27 @@ Button options should size the zone with a scrubber on an arc from 8 o’clock (
 
 ---
 
+## BUG-018 — Other buttons dead while a turbo button is held
+
+**Status:** in progress
+**Reported:** 2026-08-19
+
+While a turbo zone is repeat-tapping, other mapped buttons do nothing. They must still fire; interrupting the current turbo tap is fine.
+
+### Cause
+
+Each turbo tap allocates a pool pointer and may stay down across the next interval. The pool empties (`no pid`) so `startHold` never injects. A turbo finger still down also blocks single-touch games from seeing a second button.
+
+### Attempts
+
+- [in progress] One reserved pointer per turbo zone. Another button first lifts in-flight turbo taps, then holds. Turbo ticks skip while any hold is down and resume when it lifts.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-016 — Stick needs a toggleable walk-tap zone; drop COPY
 
 **Status:** in progress

@@ -72,6 +72,8 @@ class PadMapAccessibilityService : AccessibilityService() {
     private val activeHolds = mutableMapOf<String, HoldState>()
     private val turboJobs = mutableMapOf<String, Job>()
     private val walkJobs = mutableMapOf<String, Job>()
+    private val turboPids = mutableMapOf<String, Int>()
+    private val turboDown = mutableSetOf<String>()
     private val axisValues = mutableMapOf<String, Pair<Float, Float>>()
     private val hatState = mutableMapOf<String, Boolean>()
     private val triggerState = mutableMapOf<String, Boolean>()
@@ -108,6 +110,37 @@ class PadMapAccessibilityService : AccessibilityService() {
     private fun allocPointer(): Int? = freePointerIds.removeFirstOrNull()
     private fun freePointer(id: Int) {
         if (id >= 0 && !freePointerIds.contains(id)) freePointerIds.addFirst(id)
+    }
+
+    private fun turboKey(entry: MappingEntry) = entry.zoneId.ifBlank { entry.inputName }
+
+    private fun reservedTurboPid(key: String): Int? {
+        turboPids[key]?.let { return it }
+        val pid = allocPointer() ?: return null
+        turboPids[key] = pid
+        return pid
+    }
+
+    private fun liftTurboTap(key: String) {
+        if (!turboDown.remove(key)) return
+        val pid = turboPids[key] ?: return
+        SidecarClient.pointerUp(pid)
+    }
+
+    private fun interruptTurboTaps() {
+        turboDown.toList().forEach { liftTurboTap(it) }
+    }
+
+    private fun releaseTurboPid(key: String) {
+        liftTurboTap(key)
+        turboPids.remove(key)?.let { freePointer(it) }
+    }
+
+    private fun releaseTurboForLabel(label: String) {
+        val layout = DataStore.activeLayout ?: return
+        layerMappings(layout).filter { it.inputName == label }.forEach {
+            releaseTurboPid(turboKey(it))
+        }
     }
 
     private fun ensureStickLoop() {
@@ -222,6 +255,9 @@ class PadMapAccessibilityService : AccessibilityService() {
         turboJobs.clear()
         walkJobs.values.forEach { it.cancel() }
         walkJobs.clear()
+        interruptTurboTaps()
+        turboPids.values.forEach { freePointer(it) }
+        turboPids.clear()
         activeHolds.keys.toList().forEach { releaseHold(it) }
         for (label in activeSticks.keys.toList()) {
             val state = activeSticks.remove(label) ?: continue
@@ -582,11 +618,13 @@ class PadMapAccessibilityService : AccessibilityService() {
         releaseHold(label)
         turboJobs[label]?.cancel()
         turboJobs.remove(label)
+        releaseTurboForLabel(label)
         syncIconPassThrough()
     }
 
     private fun startHold(label: String, entries: List<MappingEntry>) {
         if (entries.isEmpty() || !sidecarReady()) return
+        interruptTurboTaps()
         activeHolds.remove(label)?.let { old ->
             old.pointerIds.forEach { pid ->
                 SidecarClient.pointerUp(pid)
@@ -624,11 +662,16 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     private fun fireTaps(entries: List<MappingEntry>) {
         if (entries.isEmpty() || !sidecarReady() || !canInject()) return
+        if (activeHolds.isNotEmpty()) {
+            PlaybackDebug.log("tap skipped hold")
+            return
+        }
         val gen = playbackGen
         entries.forEach { entry ->
+            val key = turboKey(entry)
             val t = ButtonTuningStore.get(entry.zoneId)
             val (x, y) = tapXY(entry)
-            val pid = allocPointer() ?: run {
+            val pid = reservedTurboPid(key) ?: run {
                 PlaybackDebug.log("tap ${entry.inputName} no pid")
                 return@forEach
             }
@@ -638,20 +681,21 @@ class PadMapAccessibilityService : AccessibilityService() {
             val finished = java.util.concurrent.atomic.AtomicBoolean(false)
             fun finish(up: Boolean) {
                 if (!finished.compareAndSet(false, true)) return
-                if (up) SidecarClient.pointerUp(pid)
-                freePointer(pid)
+                if (up) liftTurboTap(key)
                 inFlightTaps = (inFlightTaps - 1).coerceAtLeast(0)
                 syncIconPassThrough()
             }
             scope.launch {
                 try {
                     mainHandler.post {
-                        if (gen != playbackGen || !canInject()) {
+                        if (gen != playbackGen || !canInject() || activeHolds.isNotEmpty()) {
                             finish(up = false)
                             return@post
                         }
+                        if (turboDown.contains(key)) liftTurboTap(key)
                         OverlayManager.instance?.noteInject(x, y)
                         SidecarClient.pointerDown(pid, x, y)
+                        turboDown.add(key)
                     }
                     delay(holdMs)
                     mainHandler.post { finish(up = true) }
@@ -674,7 +718,10 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     private fun setWalkTapping(label: String, on: Boolean) {
         if (!on) {
-            if (walkJobs.remove(label)?.also { it.cancel() } != null) syncIconPassThrough()
+            if (walkJobs.remove(label)?.also { it.cancel() } != null) {
+                walkTapsFor(label).forEach { releaseTurboPid(turboKey(it)) }
+                syncIconPassThrough()
+            }
             return
         }
         val taps = walkTapsFor(label)
