@@ -393,6 +393,7 @@ class OverlayManager(private val context: Context) {
         if (!isStick) editingZones.removeAll { it.parentStickId == zone.id }
         if (inputName == "LT" || inputName == "RT") ButtonTuningStore.initForTrigger(zone.id)
         pendingZoneId = null
+        persistZones()
         handler.post {
             rebuildZoneLayer()
         }
@@ -963,6 +964,7 @@ class OverlayManager(private val context: Context) {
     private fun setButtonSize(zone: ZoneData, radius: Float) {
         zone.innerRadius = radius.coerceIn(dp(16).toFloat(), dp(80).toFloat())
         DataStore.update { it.copy(buttonZoneRadius = zone.innerRadius) }
+        persistZones()
         val v = zoneViews[zone.id] ?: return
         val newSize = viewSizeForZone(zone)
         val lp = v.layoutParams as? FrameLayout.LayoutParams ?: return
@@ -987,6 +989,7 @@ class OverlayManager(private val context: Context) {
         editingZones.removeAll { it.layer == editingLayer }
         pendingZoneId = null
         dismissContextMenu()
+        persistZones()
         rebuildZoneLayer()
     }
 
@@ -998,7 +1001,8 @@ class OverlayManager(private val context: Context) {
         editingZones.filter { it.layer == editingLayer }.forEach { addZoneView(layer, it) }
     }
 
-    private fun saveAndExit() {
+    private fun persistZones() {
+        if (editingLayoutId.isBlank()) return
         val mappings = editingZones.filter { it.isPlaced }.map { zone ->
             MappingEntry(
                 inputName = if (zone.isWalkTap) "@walk" else zone.inputName,
@@ -1014,14 +1018,10 @@ class OverlayManager(private val context: Context) {
         }
         DataStore.update { data ->
             val updatedLayouts = if (data.gameLayouts.any { it.id == editingLayoutId }) {
-                // Normal path: layout exists, update its mappings in-place.
                 data.gameLayouts.map {
                     if (it.id == editingLayoutId) it.copy(mappings = mappings) else it
                 }
             } else {
-                // Safety net: layout was dropped from in-memory state (e.g. DataStore race
-                // at service startup overwrote the entry added in enterConfigModeFromIcon).
-                // Re-add it rather than silently discarding the user's work.
                 data.gameLayouts + GameLayout(
                     id = editingLayoutId,
                     packageName = configGamePackage,
@@ -1032,6 +1032,10 @@ class OverlayManager(private val context: Context) {
             }
             data.copy(activeLayoutId = editingLayoutId, gameLayouts = updatedLayouts)
         }
+    }
+
+    private fun saveAndExit() {
+        persistZones()
         exitConfigMode()
     }
 
@@ -1276,6 +1280,7 @@ class OverlayManager(private val context: Context) {
             if (zone.isStick && zone.inputName.isNotBlank()) hideDebugOverlay(zone.inputName)
             editingZones.removeAll { it.id == zone.id || it.parentStickId == zone.id }
             if (pendingZoneId == zone.id) pendingZoneId = null
+            persistZones()
             dismissContextMenu()
             rebuildZoneLayer()
         })
@@ -1288,6 +1293,7 @@ class OverlayManager(private val context: Context) {
             buttons.add(BtnSpec(modeIcon, modeColor) {
                 zone.lookMode = !zone.lookMode
                 zoneViews[zone.id]?.invalidate()
+                persistZones()
                 showContextMenu(zone)
             })
         }
@@ -1298,6 +1304,7 @@ class OverlayManager(private val context: Context) {
                 buttons.add(BtnSpec("T", if (zone.turbo) Color.parseColor("#FFB300") else Color.parseColor("#336699")) {
                     zone.turbo = !zone.turbo
                     zoneViews[zone.id]?.invalidate()
+                    persistZones()
                     showContextMenu(zone)
                 })
             }
@@ -1314,6 +1321,7 @@ class OverlayManager(private val context: Context) {
             val walkOn = editingZones.any { it.parentStickId == zone.id }
             buttons.add(BtnSpec("\u21BB", if (walkOn) Color.parseColor("#FF8C00") else Color.parseColor("#336699")) {
                 toggleStickWalkZone(zone)
+                persistZones()
                 rebuildZoneLayer()
                 showContextMenu(zone)
             })
@@ -1911,6 +1919,7 @@ class OverlayManager(private val context: Context) {
                         contextMenuViews.forEach { it.visibility = View.VISIBLE }
                         menuHidden = false
                     }
+                    if ((dragged || dragMode == DragMode.RESIZE) && zone.isPlaced) persistZones()
                     if (dragMode == DragMode.MOVE && zone.isPlaced && !dragged)
                         onTap(zone)
                     dragMode = DragMode.NONE
@@ -2240,7 +2249,9 @@ class OverlayManager(private val context: Context) {
             background = outlineDrawable(Color.parseColor("#CC3333"))
             setOnClickListener {
                 ButtonTuningStore.reset(tuneZoneId)
+                ButtonTuningStore.persist()
                 editingZones.find { it.id == tuneZoneId }?.turbo = false
+                persistZones()
                 zoneViews[tuneZoneId]?.invalidate()
                 refreshTuningContent()
             }
@@ -2303,6 +2314,7 @@ class OverlayManager(private val context: Context) {
                     MotionEvent.ACTION_DOWN -> {
                         val pressStart = System.currentTimeMillis()
                         action(1)
+                        ButtonTuningStore.persist()
                         valueLabel.text = getValue()
                         tuningRepeatRunnable?.let { handler.removeCallbacks(it) }
                         tuningRepeatRunnable = object : Runnable {
@@ -2314,6 +2326,7 @@ class OverlayManager(private val context: Context) {
                                     else         -> 1
                                 }
                                 action(amount)
+                                ButtonTuningStore.persist()
                                 valueLabel.text = getValue()
                                 handler.postDelayed(this, 80L)
                             }
@@ -2457,6 +2470,7 @@ class OverlayManager(private val context: Context) {
                 ).apply { marginEnd = dp(4) }
                 setOnClickListener {
                     ButtonTuningStore.getStick(stickTuneZoneId).invertY = option == "ON"
+                    ButtonTuningStore.persist()
                     refreshTuningContent()
                 }
             })
@@ -2500,6 +2514,7 @@ class OverlayManager(private val context: Context) {
                 setOnClickListener {
                     val show = option == "ON"
                     ButtonTuningStore.getStick(stickTuneZoneId).showDebug = show
+                    ButtonTuningStore.persist()
                     if (show) showDebugOverlay(stickTuneDisplayLabel)
                     else hideDebugOverlay(stickTuneDisplayLabel)
                     refreshTuningContent()
@@ -2525,6 +2540,7 @@ class OverlayManager(private val context: Context) {
             background = outlineDrawable(Color.parseColor("#CC3333"))
             setOnClickListener {
                 ButtonTuningStore.resetStick(stickTuneZoneId)
+                ButtonTuningStore.persist()
                 hideDebugOverlay(stickTuneDisplayLabel)
                 refreshTuningContent()
             }

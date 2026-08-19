@@ -40,6 +40,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         private const val DEAD_ZONE = 0.15f
         private const val TURBO_INTERVAL_MS = 100L
         private const val STICK_TICK_MS = 16L
+        private const val STICK_MUX_MS = 8L
         private const val STICK_RELEASE_TICKS = 8
         private const val LOOK_RELEASE_TICKS = 20
         // Leave headroom under sidecar MAX_POINTERS (10) so a look wrap or extra tap cannot overflow.
@@ -60,7 +61,8 @@ class PadMapAccessibilityService : AccessibilityService() {
         val pointerId: Int,
         var lastTickMs: Long = 0L,
         var filtX: Float = 0f,
-        var filtY: Float = 0f
+        var filtY: Float = 0f,
+        var injectedDown: Boolean = true
     )
 
     private data class HoldState(
@@ -90,6 +92,8 @@ class PadMapAccessibilityService : AccessibilityService() {
             inFlightTaps > 0 || turboJobs.isNotEmpty() || walkJobs.isNotEmpty()
 
     private var stickLoopRunning = false
+    private var muxLookTurn = false
+    private var muxBoth = false
     private var lastSidecarWarnMs = 0L
 
     var foregroundPackage: String = ""
@@ -104,7 +108,8 @@ class PadMapAccessibilityService : AccessibilityService() {
     private val stickRunnable = object : Runnable {
         override fun run() {
             tickSticks()
-            if (activeSticks.isNotEmpty()) mainHandler.postDelayed(this, STICK_TICK_MS)
+            if (activeSticks.isNotEmpty())
+                mainHandler.postDelayed(this, if (muxBoth) STICK_MUX_MS else STICK_TICK_MS)
             else stickLoopRunning = false
         }
     }
@@ -786,15 +791,11 @@ class PadMapAccessibilityService : AccessibilityService() {
     private fun tickSticksInner() {
         val updates = mutableMapOf<Int, Pair<Float, Float>>()
         val toRelease = mutableListOf<String>()
+        val moving = mutableListOf<Pair<String, StickState>>()
         for ((label, state) in activeSticks.toMap()) {
             val (rawX, rawY) = axisValues[label] ?: (0f to 0f)
             val (sx, sy) = radialDeadZone(rawX, rawY, state.drag.deadZone)
             val mag = sqrt(sx * sx + sy * sy)
-            val zoneId = DataStore.activeLayout?.let { layerMappings(it) }
-                ?.firstOrNull { it.inputName == label }?.zoneId?.ifBlank { label } ?: label
-            val tuning = ButtonTuningStore.getStick(zoneId)
-            val scale = tuning.sensitivityPct
-            val lookY = if (tuning.invertY) -sy else sy
             if (mag < 0.01f) {
                 setWalkTapping(label, false)
                 val n = (stickDeadTicks[label] ?: 0) + 1
@@ -809,10 +810,37 @@ class PadMapAccessibilityService : AccessibilityService() {
                 continue
             }
             stickDeadTicks[label] = 0
+            moving.add(label to state)
+        }
+        val lookLive = moving.any { it.second.lookMode }
+        val moveLive = moving.any { !it.second.lookMode }
+        muxBoth = lookLive && moveLive
+        if (muxBoth) muxLookTurn = !muxLookTurn
+
+        for ((label, state) in moving) {
+            val myTurn = !muxBoth || (state.lookMode == muxLookTurn)
+            if (!myTurn) {
+                if (state.injectedDown) {
+                    SidecarClient.pointerUpAsync(state.pointerId)
+                    state.injectedDown = false
+                }
+                continue
+            }
+            if (!state.injectedDown) {
+                SidecarClient.pointerDownAsync(state.pointerId, state.currentX, state.currentY)
+                state.injectedDown = true
+            }
+            val (rawX, rawY) = axisValues[label] ?: (0f to 0f)
+            val (sx, sy) = radialDeadZone(rawX, rawY, state.drag.deadZone)
+            val zoneId = DataStore.activeLayout?.let { layerMappings(it) }
+                ?.firstOrNull { it.inputName == label }?.zoneId?.ifBlank { label } ?: label
+            val tuning = ButtonTuningStore.getStick(zoneId)
+            val scale = tuning.sensitivityPct
+            val lookY = if (tuning.invertY) -sy else sy
             setWalkTapping(label, true)
             if (state.lookMode) {
-                state.filtX += (sx - state.filtX) * 0.42f
-                state.filtY += (lookY - state.filtY) * 0.42f
+                state.filtX += (sx - state.filtX) * 0.55f
+                state.filtY += (lookY - state.filtY) * 0.55f
                 val now = android.os.SystemClock.uptimeMillis()
                 val dt = if (state.lastTickMs == 0L) 0.016f
                     else ((now - state.lastTickMs).coerceIn(4L, 32L)) / 1000f
@@ -821,7 +849,7 @@ class PadMapAccessibilityService : AccessibilityService() {
                 var nx = state.currentX + state.filtX * step
                 var ny = state.currentY + state.filtY * step
                 val dm = resources.displayMetrics
-                val margin = 32f
+                val margin = 24f
                 val oob = nx < margin || ny < margin ||
                     nx > dm.widthPixels - margin || ny > dm.heightPixels - margin
                 if (oob) {
@@ -829,14 +857,11 @@ class PadMapAccessibilityService : AccessibilityService() {
                         .coerceAtLeast(0.01f)
                     val ox = state.drag.centerX + state.filtX / fm * 16f
                     val oy = state.drag.centerY + state.filtY / fm * 16f
-                    // UP/DOWN while move (or a hold) is down hitchs the other finger and can
-                    // stall the main thread on sidecar I/O. Warp with MOVE instead.
-                    val others = activeSticks.size > 1 || activeHolds.isNotEmpty() || turboDown.isNotEmpty()
-                    if (!others) {
-                        SidecarClient.pointerUp(state.pointerId)
-                        OverlayManager.instance?.noteInject(ox, oy)
-                        SidecarClient.pointerDown(state.pointerId, ox, oy)
-                    }
+                    // Classic wrap: lift and re-plant along the look vector. During mux
+                    // this stick is the only injected finger, so UP/DOWN is safe.
+                    SidecarClient.pointerUpAsync(state.pointerId)
+                    OverlayManager.instance?.noteInject(ox, oy)
+                    SidecarClient.pointerDownAsync(state.pointerId, ox, oy)
                     nx = ox + state.filtX * step
                     ny = oy + state.filtY * step
                 }

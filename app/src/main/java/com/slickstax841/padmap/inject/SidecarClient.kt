@@ -116,6 +116,36 @@ object SidecarClient {
         }
     }
 
+    fun pointerDownAsync(id: Int, x: Float, y: Float) {
+        io.execute {
+            try {
+                synchronized(lock) {
+                    if (!ensureConnectedLocked()) return@synchronized
+                    writeAndAckLocked {
+                        output!!.writeByte(CMD_DOWN.toInt())
+                        output!!.writeByte(id)
+                        output!!.writeFloat(x)
+                        output!!.writeFloat(y)
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
+    fun pointerUpAsync(id: Int) {
+        io.execute {
+            try {
+                synchronized(lock) {
+                    if (!ensureConnectedLocked()) return@synchronized
+                    writeAndAckLocked {
+                        output!!.writeByte(CMD_UP.toInt())
+                        output!!.writeByte(id)
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
     fun pointerUp(id: Int): Boolean = onIo {
         synchronized(lock) {
             if (!ensureConnectedLocked()) false

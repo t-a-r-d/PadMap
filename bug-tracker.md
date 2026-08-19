@@ -224,6 +224,27 @@ Button options should size the zone with a scrubber on an arc from 8 o’clock (
 
 ---
 
+## BUG-022 — Zone settings lost; look jumps at the edge
+
+**Status:** in progress
+**Reported:** 2026-08-19
+
+Tune/size/turbo/look mode must stick until the user changes them. Look sometimes leaps back from the far edge in another direction, even with move unused. If dual-stick is still hard, alternate them fast enough that it does not show.
+
+### Cause
+
+`ButtonTuningStore` is memory-only. Layout mappings only write on SAVE. Look recycle used MOVE-warp whenever `turboDown` or another pointer was set, so the finger teleported toward centre. Dual-stick UP/DOWN hitch remains if both pointers stay down.
+
+### Attempts
+
+- [in progress] Persist tuning + auto-write mappings on each zone change. Solo look uses the old UP/DOWN wrap. Both sticks: 8ms single-pointer mux.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-021 — Options disc small; zones hard to drag; sticks judder / app quits
 
 **Status:** in progress

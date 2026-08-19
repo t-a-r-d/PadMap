@@ -95,7 +95,22 @@ data class AppData(
     val portY: Int? = null,
     val portW: Int? = null,
     val portH: Int? = null,
-    val buttonZoneRadius: Float = 32f
+    val buttonZoneRadius: Float = 32f,
+    val buttonTuning: Map<String, SavedButtonTuning> = emptyMap(),
+    val stickTuning: Map<String, SavedStickTuning> = emptyMap()
+)
+
+@Serializable
+data class SavedButtonTuning(
+    val tapDurationMs: Long = 32L,
+    val repeatIntervalMs: Long = 100L
+)
+
+@Serializable
+data class SavedStickTuning(
+    val sensitivityPct: Float = 1.0f,
+    val invertY: Boolean = false,
+    val showDebug: Boolean = false
 )
 
 fun GameLayout.resolvedBinds(): List<LayerBind> {

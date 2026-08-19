@@ -9,9 +9,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 object DataStore {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val saveLock = Mutex()
     private lateinit var storage: PresetStorage
 
     private val _data = MutableStateFlow(AppData())
@@ -24,12 +27,15 @@ object DataStore {
         // Prevents the async-load race where a late IO write overwrites updates
         // already applied on the main thread (e.g. a new layout added right after start).
         runBlocking { _data.value = storage.load() }
+        ButtonTuningStore.hydrate(_data.value)
     }
 
     fun update(transform: (AppData) -> AppData) {
         val updated = transform(_data.value)
-        _data.value = updated          // update in-memory state immediately (any thread)
-        scope.launch { storage.save(updated) }  // persist to disk asynchronously
+        _data.value = updated
+        scope.launch {
+            saveLock.withLock { storage.save(_data.value) }
+        }
     }
 
     val activeLayout: GameLayout?

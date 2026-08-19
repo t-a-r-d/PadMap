@@ -47,4 +47,35 @@ object ButtonTuningStore {
         if (configs.containsKey(zoneId)) return
         configs[zoneId] = ButtonTuning(mode = ButtonMode.HOLD)
     }
+
+    fun hydrate(data: AppData) {
+        configs.clear()
+        data.buttonTuning.forEach { (id, s) ->
+            configs[id] = ButtonTuning().also {
+                it.tapDurationMs = s.tapDurationMs
+                it.repeatIntervalMs = s.repeatIntervalMs
+            }
+        }
+        stickConfigs.clear()
+        data.stickTuning.forEach { (id, s) ->
+            stickConfigs[id] = StickTuning(
+                sensitivityPct = s.sensitivityPct,
+                invertY = s.invertY,
+                showDebug = s.showDebug
+            )
+        }
+    }
+
+    fun persist() {
+        DataStore.update { data ->
+            data.copy(
+                buttonTuning = configs.mapValues { (_, v) ->
+                    SavedButtonTuning(v.tapDurationMs, v.repeatIntervalMs)
+                },
+                stickTuning = stickConfigs.mapValues { (_, v) ->
+                    SavedStickTuning(v.sensitivityPct, v.invertY, v.showDebug)
+                }
+            )
+        }
+    }
 }
