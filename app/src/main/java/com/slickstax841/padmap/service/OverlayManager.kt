@@ -1309,18 +1309,16 @@ class OverlayManager(private val context: Context) {
             })
         }
 
-        val btnSize = dp(40)
-        val gap = dp(12)
-        val pad = dp(14)
-        val orbit = btnSize + gap
-        val discSize = (orbit + btnSize / 2 + pad) * 2
+        val btnSize = dp(30)
+        val discSize = dp(100)
+        val orbit = discSize / 2f - btnSize / 2f - dp(5)
         val showSize = !zone.isStick && zone.isPlaced
-        val trackPad = if (showSize) dp(22) else 0
+        val trackPad = if (showSize) dp(36) else 0
         val clusterSize = discSize + trackPad * 2
 
         fun optionBtn(spec: BtnSpec) = TextView(context).apply {
             text = spec.icon
-            textSize = 16f
+            textSize = 13f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
@@ -1350,7 +1348,8 @@ class OverlayManager(private val context: Context) {
             topMargin = mid
         })
         buttons.forEachIndexed { i, spec ->
-            val angle = -Math.PI / 2.0 + 2.0 * Math.PI * i / buttons.size
+            // Start at 8 o'clock and go clockwise so two actions sit on the sides, not 12 and 6.
+            val angle = Math.toRadians(150.0) + 2.0 * Math.PI * i / buttons.size
             val cx = discSize / 2f + cos(angle).toFloat() * orbit - btnSize / 2f
             val cy = discSize / 2f + sin(angle).toFloat() * orbit - btnSize / 2f
             disc.addView(optionBtn(spec), FrameLayout.LayoutParams(btnSize, btnSize).apply {
@@ -1890,7 +1889,8 @@ class OverlayManager(private val context: Context) {
         private val minR = dp(16).toFloat()
         private val maxR = dp(80).toFloat()
         private val thumbR = dp(9).toFloat()
-        private val hit = dp(22).toFloat()
+        private val hit = dp(26).toFloat()
+        private val trackGap = dp(22).toFloat()
         private var dragging = false
         private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -1909,12 +1909,36 @@ class OverlayManager(private val context: Context) {
             color = Color.WHITE
         }
 
-        private fun trackRadius() = discPx / 2f + dp(6)
+        private fun trackRadius() = discPx / 2f + trackGap
         private fun sizeToT() = ((zone.innerRadius - minR) / (maxR - minR)).coerceIn(0f, 1f)
-        private fun applyDeg(deg: Double) {
-            val t = ((deg.coerceIn(150.0, 330.0) - 150.0) / 180.0).toFloat()
-            setButtonSize(zone, minR + t * (maxR - minR))
+        private fun arcRad(t: Float) = Math.toRadians(150.0 - 180.0 * t.toDouble())
+
+        // Map a finger vector to 0..1 on the top 8→2 arc (nearest endpoint if off-arc).
+        private fun tFromFinger(dx: Float, dy: Float): Float {
+            var deg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble()))
+            if (deg < 0) deg += 360.0
+            if (deg in 150.0..330.0) return ((deg - 150.0) / 180.0).toFloat()
+            val dMax = if (deg > 330.0) deg - 330.0 else deg + 30.0
+            val dMin = if (deg < 150.0) 150.0 - deg else 510.0 - deg
+            return if (dMin <= dMax) 0f else 1f
+        }
+
+        private fun applyT(t: Float) {
+            setButtonSize(zone, minR + t.coerceIn(0f, 1f) * (maxR - minR))
             invalidate()
+        }
+
+        private fun distToArc(x: Float, y: Float): Float {
+            val cx = width / 2f
+            val cy = height / 2f
+            val t = tFromFinger(x - cx, y - cy)
+            val ang = arcRad(t)
+            val r = trackRadius()
+            val px = cx + cos(ang).toFloat() * r
+            val py = cy + sin(ang).toFloat() * r
+            val ddx = x - px
+            val ddy = y - py
+            return sqrt(ddx * ddx + ddy * ddy)
         }
 
         override fun onDraw(canvas: Canvas) {
@@ -1922,7 +1946,7 @@ class OverlayManager(private val context: Context) {
             val cy = height / 2f
             val r = trackRadius()
             canvas.drawArc(cx - r, cy - r, cx + r, cy + r, 150f, -180f, false, trackPaint)
-            val ang = Math.toRadians(150.0 - 180.0 * sizeToT())
+            val ang = arcRad(sizeToT())
             val tx = cx + cos(ang).toFloat() * r
             val ty = cy + sin(ang).toFloat() * r
             canvas.drawCircle(tx, ty, thumbR, thumbPaint)
@@ -1932,24 +1956,17 @@ class OverlayManager(private val context: Context) {
         override fun onTouchEvent(e: MotionEvent): Boolean {
             val cx = width / 2f
             val cy = height / 2f
-            val dx = e.x - cx
-            val dy = e.y - cy
-            val dist = sqrt(dx * dx + dy * dy)
-            var deg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble()))
-            if (deg < 0) deg += 360.0
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    if (kotlin.math.abs(dist - trackRadius()) <= hit && deg in 150.0..330.0) {
-                        dragging = true
-                        parent.requestDisallowInterceptTouchEvent(true)
-                        applyDeg(deg)
-                        return true
-                    }
-                    return false
+                    if (distToArc(e.x, e.y) > hit) return false
+                    dragging = true
+                    parent.requestDisallowInterceptTouchEvent(true)
+                    applyT(tFromFinger(e.x - cx, e.y - cy))
+                    return true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (!dragging) return false
-                    applyDeg(deg)
+                    applyT(tFromFinger(e.x - cx, e.y - cy))
                     return true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {

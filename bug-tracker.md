@@ -224,6 +224,27 @@ Button options should size the zone with a scrubber on an arc from 8 o’clock (
 
 ---
 
+## BUG-019 — Options cluster too big; size scrubber not on the top arc
+
+**Status:** in progress
+**Reported:** 2026-08-19
+
+The options disc is large and the actions read as a vertical set. Size track should sit further out around the top (8→2 over the top, not under the disc). The knob must follow a finger along the arc and jump to a tap on the track.
+
+### Cause
+
+`discSize` is driven by `orbit = btnSize + gap` (~172dp). Few actions start at 12 o’clock so two buttons land at 12 and 6. Track gap is 6dp. Scrubber maps raw `atan2` with `coerceIn(150,330)`, so a finger off that range jumps and feels like an up/down slider.
+
+### Attempts
+
+- [in progress] Smaller disc, buttons on an inner ring starting at 8 o’clock. Track farther out on the top 8→2 arc. Nearest-point-on-arc for tap and drag.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-018 — Other buttons dead while a turbo button is held
 
 **Status:** in progress
