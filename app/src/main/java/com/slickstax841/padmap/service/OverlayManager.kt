@@ -79,6 +79,9 @@ class OverlayManager(private val context: Context) {
     private var panelLeftBeforeTune = 0
     private var panelTopBeforeTune = 0
     private var panelHiddenForTune = false
+    private var panelParkedForMenu = false
+    private var panelLeftBeforeMenu = 0
+    private var panelTopBeforeMenu = 0
 
     private val wm = context.getSystemService(WindowManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
@@ -1291,6 +1294,13 @@ class OverlayManager(private val context: Context) {
 
         // TUNE — button zones only, must be assigned
         if (!zone.isStick && zone.isPlaced) {
+            if (!zone.isWalkTap) {
+                buttons.add(BtnSpec("T", if (zone.turbo) Color.parseColor("#FFB300") else Color.parseColor("#336699")) {
+                    zone.turbo = !zone.turbo
+                    zoneViews[zone.id]?.invalidate()
+                    showContextMenu(zone)
+                })
+            }
             buttons.add(BtnSpec("\u2699", Color.parseColor("#007A99")) {
                 showTuningBox(zone.id, if (zone.isWalkTap) "WALK" else zone.inputName, zone.cx, zone.cy)
             })
@@ -1381,6 +1391,7 @@ class OverlayManager(private val context: Context) {
         configRoot?.addView(cluster, clusterLp)
         contextMenuViews.add(cluster)
         highlightZone(zone.id)
+        parkHomeAwayFrom(cluster)
 
         var dragStartRawX = 0f
         var dragStartRawY = 0f
@@ -1420,10 +1431,88 @@ class OverlayManager(private val context: Context) {
         zoneViews.forEach { (zid, v) -> v.setMenuActive(zid == id) }
     }
 
+    private fun parkHomeAwayFrom(cluster: View) {
+        val panel = configPanel ?: return
+        val root = configRoot ?: return
+        if (panel.visibility != View.VISIBLE) return
+        val pLp = panel.layoutParams as? FrameLayout.LayoutParams ?: return
+        if (!panelParkedForMenu) {
+            panelLeftBeforeMenu = pLp.leftMargin
+            panelTopBeforeMenu = pLp.topMargin
+            panelParkedForMenu = true
+        }
+        fun place() {
+            val gap = dp(16)
+            val pw = panel.width.takeIf { it > 0 } ?: return
+            val ph = panel.height.takeIf { it > 0 } ?: return
+            val cw = cluster.width.takeIf { it > 0 } ?: cluster.layoutParams.width
+            val ch = cluster.height.takeIf { it > 0 } ?: cluster.layoutParams.height
+            if (cw <= 0 || ch <= 0) return
+            val cLp = cluster.layoutParams as? FrameLayout.LayoutParams ?: return
+            val cx = cLp.leftMargin
+            val cy = cLp.topMargin
+            val rw = root.width.takeIf { it > 0 } ?: dm.widthPixels
+            val rh = root.height.takeIf { it > 0 } ?: dm.heightPixels
+            fun overlaps(x: Int, y: Int) =
+                x < cx + cw + gap && x + pw > cx - gap &&
+                    y < cy + ch + gap && y + ph > cy - gap
+            var nx = panelLeftBeforeMenu
+            var ny = panelTopBeforeMenu
+            if (overlaps(nx, ny)) {
+                val left = cx - pw - gap
+                val right = cx + cw + gap
+                val above = cy - ph - gap
+                val below = cy + ch + gap
+                when {
+                    left >= 0 -> {
+                        nx = left
+                        ny = cy.coerceIn(0, (rh - ph).coerceAtLeast(0))
+                    }
+                    right + pw <= rw -> {
+                        nx = right
+                        ny = cy.coerceIn(0, (rh - ph).coerceAtLeast(0))
+                    }
+                    above >= 0 -> {
+                        ny = above
+                        nx = cx.coerceIn(0, (rw - pw).coerceAtLeast(0))
+                    }
+                    below + ph <= rh -> {
+                        ny = below
+                        nx = cx.coerceIn(0, (rw - pw).coerceAtLeast(0))
+                    }
+                    else -> {
+                        nx = 0
+                        ny = 0
+                    }
+                }
+            }
+            pLp.leftMargin = nx
+            pLp.topMargin = ny
+            panel.layoutParams = pLp
+        }
+        if (panel.width == 0 || cluster.width == 0) {
+            panel.post { cluster.post { if (panelParkedForMenu) place() } }
+        } else {
+            place()
+        }
+    }
+
+    private fun restoreHomeAfterMenu() {
+        if (!panelParkedForMenu) return
+        panelParkedForMenu = false
+        if (panelHiddenForTune) return
+        val panel = configPanel ?: return
+        val lp = panel.layoutParams as? FrameLayout.LayoutParams ?: return
+        lp.leftMargin = panelLeftBeforeMenu
+        lp.topMargin = panelTopBeforeMenu
+        panel.layoutParams = lp
+    }
+
     private fun dismissContextMenu() {
         highlightZone(null)
         contextMenuViews.forEach { (it.parent as? ViewGroup)?.removeView(it) }
         contextMenuViews.clear()
+        restoreHomeAfterMenu()
         dismissTuningBox()
         // If the pending zone is already assigned, clear the pending state — the user
         // dismissed the menu without pressing a new input, so no reassignment should happen.
@@ -1994,8 +2083,14 @@ class OverlayManager(private val context: Context) {
     private fun hideHomeForTune() {
         val panel = configPanel ?: return
         val lp = panel.layoutParams as? FrameLayout.LayoutParams ?: return
-        panelLeftBeforeTune = lp.leftMargin
-        panelTopBeforeTune = lp.topMargin
+        if (panelParkedForMenu) {
+            panelLeftBeforeTune = panelLeftBeforeMenu
+            panelTopBeforeTune = panelTopBeforeMenu
+            panelParkedForMenu = false
+        } else {
+            panelLeftBeforeTune = lp.leftMargin
+            panelTopBeforeTune = lp.topMargin
+        }
         panelHiddenForTune = true
         highlightZone(null)
         contextMenuViews.forEach { (it.parent as? ViewGroup)?.removeView(it) }
@@ -2096,51 +2191,7 @@ class OverlayManager(private val context: Context) {
         val zone = editingZones.find { it.id == tuneZoneId }
         val container = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
 
-        val turboRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(8) }
-        }
         val walkTune = zone?.isWalkTap == true
-        if (!walkTune) {
-        turboRow.addView(TextView(context).apply {
-            text = "TURBO"
-            textSize = 13f
-            setTextColor(Color.parseColor("#AAAAAA"))
-            layoutParams = LinearLayout.LayoutParams(dp(80), LinearLayout.LayoutParams.WRAP_CONTENT)
-        })
-        listOf("OFF", "ON").forEach { option ->
-            val on = (option == "ON") == (zone?.turbo == true)
-            turboRow.addView(TextView(context).apply {
-                text = option
-                textSize = 13f
-                setPadding(dp(12), dp(8), dp(12), dp(8))
-                setTextColor(if (on) Color.BLACK else Color.parseColor("#FFB300"))
-                background = if (on) GradientDrawable().apply {
-                    setColor(Color.parseColor("#FFB300"))
-                    cornerRadius = dp(4).toFloat()
-                } else GradientDrawable().apply {
-                    setColor(Color.TRANSPARENT)
-                    setStroke(dp(1), Color.parseColor("#FFB300"))
-                    cornerRadius = dp(4).toFloat()
-                }
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { marginEnd = dp(4) }
-                setOnClickListener {
-                    zone?.turbo = option == "ON"
-                    zoneViews[tuneZoneId]?.invalidate()
-                    refreshTuningContent()
-                }
-            })
-        }
-        container.addView(turboRow)
-        }
-
         if (walkTune || zone?.turbo == true) {
             container.addView(stepperRow(
                 label = "DURATION",

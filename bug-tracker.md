@@ -224,6 +224,27 @@ Button options should size the zone with a scrubber on an arc from 8 o’clock (
 
 ---
 
+## BUG-020 — Turbo belongs on the options ring; home overlaps the cluster
+
+**Status:** in progress
+**Reported:** 2026-08-19
+
+Turbo on/off is in the tune box. It should be a ring button with the other zone options. While the ring is open the home card overlaps it; home should slide aside and return when the ring closes.
+
+### Cause
+
+`buildTuningContent` owns the TURBO row. `showContextMenu` does not move `configPanel`.
+
+### Attempts
+
+- [in progress] T on the ring toggles turbo (orange when on). Tune keeps duration/interval only. Park home off the cluster without writing `panelX`/`panelY`; restore on dismiss.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-019 — Options cluster too big; size scrubber not on the top arc
 
 **Status:** in progress
