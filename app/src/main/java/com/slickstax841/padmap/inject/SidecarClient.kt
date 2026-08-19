@@ -81,6 +81,26 @@ object SidecarClient {
         }
     }
 
+    fun batchUpdateAsync(updates: Map<Int, Pair<Float, Float>>) {
+        if (updates.isEmpty()) return
+        io.execute {
+            try {
+                synchronized(lock) {
+                    if (!ensureConnectedLocked() || updates.isEmpty()) return@synchronized
+                    writeAndAckLocked {
+                        output!!.writeByte(CMD_BATCH.toInt())
+                        output!!.writeByte(updates.size)
+                        for ((id, pos) in updates) {
+                            output!!.writeByte(id)
+                            output!!.writeFloat(pos.first)
+                            output!!.writeFloat(pos.second)
+                        }
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
     fun batchUpdate(updates: Map<Int, Pair<Float, Float>>): Boolean = onIo {
         synchronized(lock) {
             if (!ensureConnectedLocked() || updates.isEmpty()) false

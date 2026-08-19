@@ -40,7 +40,8 @@ object PlaybackDebug {
             )
             appendLine(
                 "uiVisible=${svc?.padMapUiVisible} fg=${svc?.foregroundPackage} " +
-                    "holds=${svc?.activeHoldCount ?: 0} sticks=${svc?.activeStickCount ?: 0}"
+                    "holds=${svc?.activeHoldCount ?: 0} sticks=${svc?.activeStickCount ?: 0} " +
+                    "layer=${svc?.activeLayer ?: 1}"
             )
             appendLine(
                 "layout=${layout?.name} maps=${layout?.mappings?.size ?: 0} " +

@@ -18,6 +18,7 @@ import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.data.GameLayout
 import com.slickstax841.padmap.data.MappingEntry
 import com.slickstax841.padmap.data.TouchAction
+import com.slickstax841.padmap.data.resolvedBinds
 import com.slickstax841.padmap.inject.SidecarClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +38,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         private const val TURBO_INTERVAL_MS = 100L
         private const val STICK_TICK_MS = 16L
         private const val STICK_RELEASE_TICKS = 8
+        private const val LOOK_RELEASE_TICKS = 20
         private val DEFAULT_AXES = mapOf(
             MotionEvent.AXIS_X to "L-Stick X",
             MotionEvent.AXIS_Y to "L-Stick Y",
@@ -88,6 +90,8 @@ class PadMapAccessibilityService : AccessibilityService() {
         private set
     var padMapUiVisible: Boolean = false
     private var playingPackage: String = ""
+    var activeLayer: Int = 1
+        private set
 
     private val stickRunnable = object : Runnable {
         override fun run() {
@@ -214,6 +218,27 @@ class PadMapAccessibilityService : AccessibilityService() {
         return true
     }
 
+    private fun layerOf(entry: MappingEntry) = if (entry.layer in 1..6) entry.layer else 1
+
+    private fun layerMappings(layout: GameLayout) =
+        layout.mappings.filter { layerOf(it) == activeLayer }
+
+    private fun switchLayer(n: Int) {
+        val next = n.coerceIn(1, 6)
+        if (next == activeLayer) return
+        activeHolds.keys.toList().forEach { releaseHold(it) }
+        for (label in activeSticks.keys.toList()) {
+            val state = activeSticks.remove(label) ?: continue
+            SidecarClient.pointerUp(state.pointerId)
+            freePointer(state.pointerId)
+        }
+        stickDeadTicks.clear()
+        activeLayer = next
+        PlaybackDebug.log("layer $activeLayer")
+        updateInputInterception()
+        syncIconPassThrough()
+    }
+
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
         disableAndStop()
         super.onTaskRemoved(rootIntent)
@@ -246,7 +271,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         for ((axisCode, axisLabelStr) in axes) {
             if (axisCode == MotionEvent.AXIS_HAT_X || axisCode == MotionEvent.AXIS_HAT_Y) continue
             val stickLabel = axisLabelStr.removeSuffix(" X").removeSuffix(" Y")
-            if (layout.mappings.none { it.inputName == stickLabel }) continue
+            if (layerMappings(layout).none { it.inputName == stickLabel }) continue
             val value = event.getAxisValue(axisCode)
             val isX = axisLabelStr.endsWith(" X")
             val cur = axisValues[stickLabel] ?: (0f to 0f)
@@ -255,7 +280,7 @@ class PadMapAccessibilityService : AccessibilityService() {
 
         for ((stickLabel, pair) in axisValues) {
             val (rawX, rawY) = pair
-            val entries = layout.mappings.filter { it.inputName == stickLabel }
+            val entries = layerMappings(layout).filter { it.inputName == stickLabel }
             val deadZone = (entries.firstOrNull()?.action as? TouchAction.Drag)?.deadZone ?: DEAD_ZONE
             val (sx, sy) = radialDeadZone(rawX, rawY, deadZone)
             val mag = sqrt(sx * sx + sy * sy)
@@ -285,6 +310,7 @@ class PadMapAccessibilityService : AccessibilityService() {
                     if (playingPackage != pkg) {
                         releaseAllPlayback()
                         playingPackage = pkg
+                        activeLayer = 1
                         PlaybackDebug.log("enter game $pkg")
                     }
                     OverlayManager.instance?.repositionForGame(pkg)
@@ -343,10 +369,15 @@ class PadMapAccessibilityService : AccessibilityService() {
         val info = serviceInfo ?: return
         val flagKey = android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
         val configOpen = OverlayManager.instance?.state == OverlayManager.State.CONFIG
-        val mapped = DataStore.activeLayout?.mappings.orEmpty()
-            .filter { it.inputName.isNotBlank() }
-        val wantKeys = configOpen || (playingPackage.isNotBlank() && mapped.any { it.action is TouchAction.Tap })
-        val wantStick = configOpen || (playingPackage.isNotBlank() && mapped.any { it.action is TouchAction.Drag })
+        val layout = DataStore.activeLayout
+        val mapped = layout?.mappings.orEmpty().filter { it.inputName.isNotBlank() }
+        val binds = layout?.resolvedBinds().orEmpty()
+        val wantKeys = configOpen || (playingPackage.isNotBlank() && (
+            mapped.any { it.action is TouchAction.Tap } ||
+                binds.any { it.activateName.isNotBlank() || it.deactivateName.isNotBlank() }
+            ))
+        val wantStick = configOpen || (playingPackage.isNotBlank() &&
+            mapped.any { it.action is TouchAction.Drag && layerOf(it) == activeLayer })
         val newFlags = if (wantKeys) info.flags or flagKey else info.flags and flagKey.inv()
         info.flags = newFlags
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -393,7 +424,25 @@ class PadMapAccessibilityService : AccessibilityService() {
             if (event.action == KeyEvent.ACTION_DOWN) PlaybackDebug.log("key $label no layout")
             return false
         }
-        if (layout.mappings.none { it.inputName == label }) {
+        for (bind in layout.resolvedBinds()) {
+            val isAct = bind.activateName == label
+            val isDeact = bind.deactivateName == label
+            if (!isAct && !isDeact) continue
+            val mappedHere = layerMappings(layout).any { it.inputName == label }
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    if (event.repeatCount > 0) return mappedHere
+                    if (mappedHere && sidecarReady()) onButtonDown(label)
+                    if (isAct) switchLayer(bind.index) else switchLayer(1)
+                    return mappedHere
+                }
+                KeyEvent.ACTION_UP -> {
+                    if (mappedHere) onButtonUp(label)
+                    return mappedHere
+                }
+            }
+        }
+        if (layerMappings(layout).none { it.inputName == label }) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
                 PlaybackDebug.log("key $label not mapped")
             return false
@@ -460,7 +509,7 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     private fun onButtonDown(label: String) {
         val layout = DataStore.activeLayout ?: return
-        val entries = layout.mappings.filter { it.inputName == label }
+        val entries = layerMappings(layout).filter { it.inputName == label }
         if (entries.isEmpty()) {
             PlaybackDebug.log("btn $label no zones")
             return
@@ -512,7 +561,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     private fun onButtonUp(label: String) {
         PlaybackDebug.log("btn up $label")
         val layout = DataStore.activeLayout ?: return
-        val mode = layout.mappings.filter { it.inputName == label && !it.turbo }
+        val mode = layerMappings(layout).filter { it.inputName == label && !it.turbo }
             .firstOrNull()?.let { ButtonTuningStore.get(it.zoneId).mode } ?: ButtonMode.HOLD
         when (mode) {
             ButtonMode.HOLD -> releaseHold(label)
@@ -624,7 +673,7 @@ class PadMapAccessibilityService : AccessibilityService() {
             val (rawX, rawY) = axisValues[label] ?: (0f to 0f)
             val (sx, sy) = radialDeadZone(rawX, rawY, state.drag.deadZone)
             val mag = sqrt(sx * sx + sy * sy)
-            val zoneId = DataStore.activeLayout?.mappings
+            val zoneId = DataStore.activeLayout?.let { layerMappings(it) }
                 ?.firstOrNull { it.inputName == label }?.zoneId?.ifBlank { label } ?: label
             val tuning = ButtonTuningStore.getStick(zoneId)
             val scale = tuning.sensitivityPct
@@ -632,7 +681,8 @@ class PadMapAccessibilityService : AccessibilityService() {
             if (mag < 0.01f) {
                 val n = (stickDeadTicks[label] ?: 0) + 1
                 stickDeadTicks[label] = n
-                if (n >= STICK_RELEASE_TICKS) {
+                val need = if (state.lookMode) LOOK_RELEASE_TICKS else STICK_RELEASE_TICKS
+                if (n >= need) {
                     toRelease.add(label)
                     OverlayManager.instance?.updateStickDebug(
                         label, state.drag.centerX, state.drag.centerY, rawX, rawY, false
@@ -642,24 +692,25 @@ class PadMapAccessibilityService : AccessibilityService() {
             }
             stickDeadTicks[label] = 0
             if (state.lookMode) {
-                state.filtX += (sx - state.filtX) * 0.35f
-                state.filtY += (lookY - state.filtY) * 0.35f
+                state.filtX += (sx - state.filtX) * 0.55f
+                state.filtY += (lookY - state.filtY) * 0.55f
                 val now = android.os.SystemClock.uptimeMillis()
                 val dt = if (state.lastTickMs == 0L) 0.016f
-                    else ((now - state.lastTickMs).coerceIn(8L, 48L)) / 1000f
+                    else ((now - state.lastTickMs).coerceIn(4L, 32L)) / 1000f
                 state.lastTickMs = now
-                val step = tuning.lookSpeed * 80f * scale * dt
+                val step = tuning.lookSpeed * 140f * scale * dt
                 var nx = state.currentX + state.filtX * step
                 var ny = state.currentY + state.filtY * step
-                val dx = nx - state.drag.centerX
-                val dy = ny - state.drag.centerY
-                val sweep = maxOf(state.drag.radius, 200f)
-                if (sqrt(dx * dx + dy * dy) > sweep * 0.92f) {
+                val dm = resources.displayMetrics
+                val margin = 24f
+                val oob = nx < margin || ny < margin ||
+                    nx > dm.widthPixels - margin || ny > dm.heightPixels - margin
+                if (oob) {
                     val fm = sqrt(state.filtX * state.filtX + state.filtY * state.filtY)
                         .coerceAtLeast(0.01f)
                     SidecarClient.pointerUp(state.pointerId)
-                    val ox = state.drag.centerX + state.filtX / fm * 10f
-                    val oy = state.drag.centerY + state.filtY / fm * 10f
+                    val ox = state.drag.centerX + state.filtX / fm * 16f
+                    val oy = state.drag.centerY + state.filtY / fm * 16f
                     SidecarClient.pointerDown(state.pointerId, ox, oy)
                     nx = ox + state.filtX * step
                     ny = oy + state.filtY * step
@@ -685,11 +736,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         }
         if (toRelease.isNotEmpty()) syncIconPassThrough()
         if (updates.isNotEmpty()) {
-            val ok = SidecarClient.batchUpdate(updates)
-            val first = updates.entries.first()
-            PlaybackDebug.logMotion(
-                "stick move pid=${first.key} ${first.value.first.toInt()},${first.value.second.toInt()} ok=$ok"
-            )
+            SidecarClient.batchUpdateAsync(updates)
         }
     }
 
@@ -717,6 +764,10 @@ class PadMapAccessibilityService : AccessibilityService() {
         for (label in listOf(negLabel, posLabel)) {
             val wasPressed = hatState[label] == true
             val nowPressed = label == pressedLabel
+            if (layerMappings(layout).none { it.inputName == label }) {
+                hatState[label] = nowPressed
+                continue
+            }
             if (nowPressed && !wasPressed) onButtonDown(label)
             if (!nowPressed && wasPressed) onButtonUp(label)
             hatState[label] = nowPressed

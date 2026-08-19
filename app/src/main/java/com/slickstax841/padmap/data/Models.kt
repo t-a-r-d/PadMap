@@ -14,12 +14,20 @@ data class ControllerPreset(
 )
 
 @Serializable
+data class LayerBind(
+    val index: Int = 1,
+    val activateName: String = "",
+    val deactivateName: String = ""
+)
+
+@Serializable
 data class GameLayout(
     val id: String,
     val name: String = "",
     val packageName: String = "",
     val controllerPresetId: String = "",
     val mappings: List<MappingEntry> = emptyList(),
+    val layerBinds: List<LayerBind> = emptyList(),
     // Uninstalled games stay here so zones come back if the user reinstalls.
     val archived: Boolean = false
 )
@@ -31,14 +39,15 @@ data class MappingEntry(
     val turbo: Boolean = false,
     // Stable identifier for the zone this entry belongs to. Tuning is keyed by this ID,
     // not by inputName — so reassigning a zone to a different button preserves its tuning.
-    val zoneId: String = ""
+    val zoneId: String = "",
+    val layer: Int = 1
 )
 
 @Serializable
 sealed class TouchAction {
     @Serializable
     @SerialName("tap")
-    data class Tap(val x: Float, val y: Float) : TouchAction()
+    data class Tap(val x: Float, val y: Float, val radius: Float = 32f) : TouchAction()
 
     @Serializable
     @SerialName("drag")
@@ -69,5 +78,16 @@ data class AppData(
     val overlayX: Int? = null,
     val overlayY: Int? = null,
     val overlayW: Int? = null,
-    val overlayH: Int? = null
+    val overlayH: Int? = null,
+    val buttonZoneRadius: Float = 32f
 )
+
+fun GameLayout.resolvedBinds(): List<LayerBind> {
+    val by = layerBinds.associateBy { it.index }
+    return (1..6).map { by[it] ?: LayerBind(it) }
+}
+
+fun GameLayout.withBind(index: Int, transform: (LayerBind) -> LayerBind): GameLayout {
+    val next = resolvedBinds().map { if (it.index == index) transform(it) else it }
+    return copy(layerBinds = next)
+}
