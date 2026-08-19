@@ -2,6 +2,10 @@ package com.slickstax841.padmap.service
 
 import android.annotation.SuppressLint
 import android.accessibilityservice.AccessibilityService
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.pm.ServiceInfo
 import android.hardware.input.InputManager
 import android.os.Build
 import android.os.Handler
@@ -150,7 +154,31 @@ class PadMapAccessibilityService : AccessibilityService() {
         updateInputInterception()
         if (OverlayManager.instance == null) OverlayManager.instance = OverlayManager(this)
         OverlayManager.instance?.startService()
+        startKeepAlive()
         SidecarClient.ping()
+    }
+
+    private fun startKeepAlive() {
+        val nm = getSystemService(NotificationManager::class.java)
+        val ch = NotificationChannel("padmap_keep", "PadMap", NotificationManager.IMPORTANCE_MIN)
+        ch.setShowBadge(false)
+        nm.createNotificationChannel(ch)
+        val n = Notification.Builder(this, "padmap_keep")
+            .setContentTitle("PadMap")
+            .setContentText("Gamepad mapping is on")
+            .setSmallIcon(com.slickstax841.padmap.R.mipmap.ic_launcher)
+            .setOngoing(true)
+            .build()
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(41, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                @Suppress("DEPRECATION")
+                startForeground(41, n)
+            }
+        } catch (_: Throwable) {
+            runCatching { startForeground(41, n) }
+        }
     }
 
     override fun onDestroy() {
@@ -185,6 +213,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     fun disableAndStop() {
         OverlayManager.instance?.detach()
         OverlayManager.instance = null
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
         runCatching { disableSelf() }
     }
 
@@ -240,7 +269,6 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
-        disableAndStop()
         super.onTaskRemoved(rootIntent)
     }
 

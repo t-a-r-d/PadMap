@@ -51,7 +51,7 @@ import com.slickstax841.padmap.data.GameLayout
 import com.slickstax841.padmap.data.GameScanner
 import com.slickstax841.padmap.data.resolvedBinds
 import com.slickstax841.padmap.data.resolvedOverlay
-import com.slickstax841.padmap.data.ScreenSize
+import com.slickstax841.padmap.data.seedOverlayIfNeeded
 import com.slickstax841.padmap.data.withBind
 import com.slickstax841.padmap.ControllerEventBus
 import com.slickstax841.padmap.inject.SidecarClient
@@ -447,14 +447,13 @@ private fun OverlayFitBlock() {
     val ctx = LocalContext.current
     val skin = LocalAppSkin.current
     val appData by DataStore.data.collectAsState()
+    LaunchedEffect(Unit) {
+        val seeded = DataStore.data.value.seedOverlayIfNeeded(ctx)
+        if (seeded !== DataStore.data.value) DataStore.update { seeded }
+    }
     val mode = appData.overlayMode
     val rect = appData.resolvedOverlay(ctx)
-    val sizeText = if (mode == "auto") {
-        val (w, h) = ScreenSize.current(ctx)
-        "Auto  $w \u00d7 $h"
-    } else {
-        "${rect.w} \u00d7 ${rect.h}"
-    }
+    val sizeText = "${if (mode == "auto") "Auto  " else ""}${rect.w} \u00d7 ${rect.h}"
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(skin.surfaceCol)) {
         Row(Modifier.fillMaxWidth()) {
             listOf("auto" to "AUTO", "landscape" to "LANDSCAPE", "portrait" to "PORTRAIT").forEach { (id, label) ->

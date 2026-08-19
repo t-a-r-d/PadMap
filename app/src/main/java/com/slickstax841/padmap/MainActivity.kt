@@ -14,6 +14,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.slickstax841.padmap.data.DataStore
+import com.slickstax841.padmap.data.GameScanner
 import com.slickstax841.padmap.service.OverlayManager
 import com.slickstax841.padmap.service.PadMapAccessibilityService
 import com.slickstax841.padmap.ui.ControllerMappingScreen
@@ -69,15 +70,15 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         PadMapAccessibilityService.instance?.padMapUiVisible = false
-        if (!isChangingConfigurations) {
-            OverlayManager.instance?.hideIconOnAppBackground()
+        if (isChangingConfigurations) return
+        val svc = PadMapAccessibilityService.instance ?: return
+        val pkg = svc.lastGamePackage.ifBlank { svc.foregroundPackage }
+        if (GameScanner.isInstalledGame(this, pkg)) {
+            OverlayManager.instance?.repositionForGame(pkg)
         }
     }
 
     override fun onDestroy() {
-        if (isFinishing) {
-            PadMapAccessibilityService.instance?.disableAndStop()
-        }
         super.onDestroy()
     }
 

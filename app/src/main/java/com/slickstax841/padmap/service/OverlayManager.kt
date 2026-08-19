@@ -21,6 +21,7 @@ import com.slickstax841.padmap.data.AppData
 import com.slickstax841.padmap.data.ScreenSize
 import com.slickstax841.padmap.data.TouchAction
 import com.slickstax841.padmap.data.resolvedOverlay
+import com.slickstax841.padmap.data.seedOverlayIfNeeded
 import java.util.UUID
 import kotlin.math.*
 
@@ -189,23 +190,18 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun applyOverlayFit(lp: WindowManager.LayoutParams, forcePixels: Boolean = false) {
-        val data = DataStore.data.value
-        val auto = data.overlayMode == "auto"
-        if (auto && !forcePixels) {
-            lp.gravity = 0
-            lp.flags = 0
-            lp.width = WindowManager.LayoutParams.MATCH_PARENT
-            lp.height = WindowManager.LayoutParams.MATCH_PARENT
-            lp.x = 0
-            lp.y = 0
-            return
+        var data = DataStore.data.value
+        val seeded = data.seedOverlayIfNeeded(context)
+        if (seeded !== data) {
+            DataStore.update { seeded }
+            data = seeded
         }
         val r = data.resolvedOverlay(context)
         lp.gravity = Gravity.TOP or Gravity.START
         lp.flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        lp.width = r.w
-        lp.height = r.h
+        lp.width = r.w.coerceAtLeast(1)
+        lp.height = r.h.coerceAtLeast(1)
         lp.x = r.x
         lp.y = r.y
     }
@@ -861,6 +857,20 @@ class OverlayManager(private val context: Context) {
         })
     }
 
+    private fun bumpButtonSize(zone: ZoneData, delta: Float) {
+        zone.innerRadius = (zone.innerRadius + delta).coerceIn(dp(16).toFloat(), dp(80).toFloat())
+        DataStore.update { it.copy(buttonZoneRadius = zone.innerRadius) }
+        val v = zoneViews[zone.id] ?: return
+        val newSize = viewSizeForZone(zone)
+        val lp = v.layoutParams as? FrameLayout.LayoutParams ?: return
+        lp.width = newSize
+        lp.height = newSize
+        lp.leftMargin = (zone.cx - newSize / 2f).toInt()
+        lp.topMargin = (zone.cy - newSize / 2f).toInt()
+        v.layoutParams = lp
+        v.invalidate()
+    }
+
     private fun createZone(x: Float, y: Float) {
         val r = DataStore.data.value.buttonZoneRadius.coerceAtLeast(16f)
         val zone = ZoneData(cx = x, cy = y, innerRadius = r, layer = editingLayer)
@@ -1161,20 +1171,6 @@ class OverlayManager(private val context: Context) {
         val screenW = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels).toFloat()
         val screenH = (configRoot?.height?.takeIf { it > 0 } ?: dm.heightPixels).toFloat()
 
-        // Determine which screen quadrant has the most open space
-        val goRight = (screenW - zone.cx) > zone.cx
-        val goDown  = (screenH - zone.cy) > zone.cy
-        val baseAngleDeg = when {
-            goRight && goDown  -> 45.0
-            !goRight && goDown -> 135.0
-            goRight && !goDown -> 315.0
-            else               -> 225.0
-        }
-
-        val zoneR = if (zone.isStick && zone.inputName.isNotBlank()) zone.outerRadius else zone.innerRadius
-        val btnR = dp(18).toFloat()
-        val placementR = zoneR + dp(32) + btnR
-
         // null onClick = drag handle (gets a touch listener instead of click listener)
         data class BtnSpec(val icon: String, val bgColor: Int, val onClick: (() -> Unit)?)
         val buttons = mutableListOf<BtnSpec>()
@@ -1207,6 +1203,12 @@ class OverlayManager(private val context: Context) {
                 rebuildZoneLayer()
                 showContextMenu(copy)
             })
+            buttons.add(BtnSpec("\u2212", Color.parseColor("#007A99")) {
+                bumpButtonSize(zone, -8f)
+            })
+            buttons.add(BtnSpec("+", Color.parseColor("#007A99")) {
+                bumpButtonSize(zone, 8f)
+            })
         }
 
         // LOOK / MOVE toggle — stick zones only, must be assigned
@@ -1238,21 +1240,13 @@ class OverlayManager(private val context: Context) {
         // MOVE — always last; drag handle, no click action
         buttons.add(BtnSpec("\u271B", Color.parseColor("#336699"), null))
 
-        val spread = 52.0
-        val btnSize = dp(36)
+        val btnSize = dp(40)
         val createdViews = mutableListOf<View>()
 
-        buttons.forEachIndexed { i, spec ->
-            val offset = (i - (buttons.size - 1) / 2.0) * spread
-            val angleRad = Math.toRadians(baseAngleDeg + offset)
-            val rawX = zone.cx + (placementR * cos(angleRad)).toFloat()
-            val rawY = zone.cy + (placementR * sin(angleRad)).toFloat()
-            val left = (rawX - btnR).coerceIn(0f, screenW - btnSize).toInt()
-            val top  = (rawY - btnR).coerceIn(0f, screenH - btnSize).toInt()
-
+        buttons.forEach { spec ->
             val btn = TextView(context).apply {
                 text = spec.icon
-                textSize = 15f
+                textSize = 16f
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
                 background = GradientDrawable().apply {
@@ -1262,42 +1256,30 @@ class OverlayManager(private val context: Context) {
                 elevation = 14f
                 if (spec.onClick != null) setOnClickListener { spec.onClick.invoke() }
             }
-            val lp = FrameLayout.LayoutParams(btnSize, btnSize).apply {
-                leftMargin = left; topMargin = top
-            }
-            zoneLayer?.addView(btn, lp)
+            zoneLayer?.addView(btn, FrameLayout.LayoutParams(btnSize, btnSize))
             contextMenuViews.add(btn)
             createdViews.add(btn)
         }
 
-        // Recalculates button positions from scratch based on current zone location.
-        // Called on initial show and on every drag tick so buttons always swing to
-        // the side with the most open space and never get clipped off screen.
-        val reposition = {
-            val goRight = (screenW - zone.cx) > zone.cx
-            val goDown  = (screenH - zone.cy) > zone.cy
-            val angle = when {
-                goRight && goDown  -> 45.0
-                !goRight && goDown -> 135.0
-                goRight && !goDown -> 315.0
-                else               -> 225.0
-            }
-            val zoneR2 = if (zone.isStick && zone.inputName.isNotBlank()) zone.outerRadius else zone.innerRadius
-            val placeR = zoneR2 + dp(32) + btnR
+        val dockToPanel = {
+            val panel = configPanel
+            val pLp = panel?.layoutParams as? FrameLayout.LayoutParams
+            val pw = panel?.width?.takeIf { it > 0 } ?: dp(200)
+            val px = pLp?.leftMargin ?: 0
+            val py = pLp?.topMargin ?: 0
+            val overlayW = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels)
+            val gap = dp(8)
+            val rightX = px + pw + gap
+            val leftX = px - btnSize - gap
+            val x = if (rightX + btnSize <= overlayW) rightX else leftX.coerceAtLeast(0)
             createdViews.forEachIndexed { i, btn ->
-                val offset = (i - (buttons.size - 1) / 2.0) * spread
-                val rad = Math.toRadians(angle + offset)
-                val bx = zone.cx + (placeR * cos(rad)).toFloat()
-                val by = zone.cy + (placeR * sin(rad)).toFloat()
                 val lp = btn.layoutParams as? FrameLayout.LayoutParams ?: return@forEachIndexed
-                lp.leftMargin = (bx - btnR).coerceIn(0f, screenW - btnSize).toInt()
-                lp.topMargin  = (by - btnR).coerceIn(0f, screenH - btnSize).toInt()
+                lp.leftMargin = x
+                lp.topMargin = py + i * (btnSize + gap)
                 btn.layoutParams = lp
             }
         }
-
-        // Apply initial positions
-        reposition()
+        if (configPanel?.width == 0) configPanel?.post { dockToPanel() } else dockToPanel()
 
         // Drag handle — last button in the list
         val dragHandle = createdViews.last()
@@ -1313,15 +1295,12 @@ class OverlayManager(private val context: Context) {
                     dragStartRawY = event.rawY
                     dragStartCx = zone.cx
                     dragStartCy = zone.cy
-                    // Hide context menu buttons while dragging (zone stays visible)
-                    createdViews.forEach { it.visibility = View.INVISIBLE }
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val zoneR = if (zone.isStick && zone.inputName.isNotBlank()) zone.outerRadius else zone.innerRadius
                     zone.cx = (dragStartCx + (event.rawX - dragStartRawX)).coerceIn(zoneR, screenW - zoneR)
                     zone.cy = (dragStartCy + (event.rawY - dragStartRawY)).coerceIn(zoneR, screenH - zoneR)
-                    // Update zone circle position (still hidden — layout kept current for reappear)
                     val zv = zoneViews[zone.id]
                     val zvLp = zv?.layoutParams as? FrameLayout.LayoutParams
                     if (zvLp != null) {
@@ -1329,15 +1308,9 @@ class OverlayManager(private val context: Context) {
                         zvLp.topMargin  = (zone.cy - zvLp.height / 2f).toInt()
                         zv.layoutParams = zvLp
                     }
-                    // Recalculate button positions — angle flips automatically at each edge
-                    reposition()
                     true
                 }
-                MotionEvent.ACTION_UP -> {
-                    // Restore context menu buttons at final position
-                    createdViews.forEach { it.visibility = View.VISIBLE }
-                    true
-                }
+                MotionEvent.ACTION_UP -> true
                 else -> false
             }
         }
@@ -1563,25 +1536,15 @@ class OverlayManager(private val context: Context) {
             } else {
                 canvas.drawCircle(cx, cy, zone.innerRadius, fillPaint)
                 canvas.drawCircle(cx, cy, zone.innerRadius, strokePaint)
-                if (!zone.isStick) {
-                    val ang = handleAngle()
-                    canvas.drawCircle(
-                        cx + cos(ang).toFloat() * zone.innerRadius,
-                        cy + sin(ang).toFloat() * zone.innerRadius,
-                        dp(10).toFloat(), handlePaint
-                    )
-                }
                 if (zone.isStick) {
                     canvas.drawCircle(cx, cy, zone.outerRadius, outerPaint)
                     canvas.drawCircle(cx, cy, zone.deadZone * zone.outerRadius, deadZonePaint)
-                    // Resize handles — placed on the side opposite the nearest screen corner
                     val ang = handleAngle()
-                    val outerDotX = cx + cos(ang).toFloat() * zone.outerRadius
-                    val outerDotY = cy + sin(ang).toFloat() * zone.outerRadius
-                    val deadDotX  = cx + cos(ang).toFloat() * zone.deadZone * zone.outerRadius
-                    val deadDotY  = cy + sin(ang).toFloat() * zone.deadZone * zone.outerRadius
-                    canvas.drawCircle(outerDotX, outerDotY, dp(10).toFloat(), handlePaint)
-                    canvas.drawCircle(deadDotX,  deadDotY,  dp(8).toFloat(),  deadDotPaint)
+                    canvas.drawCircle(
+                        cx + cos(ang).toFloat() * zone.outerRadius,
+                        cy + sin(ang).toFloat() * zone.outerRadius,
+                        dp(10).toFloat(), handlePaint
+                    )
                 }
                 // Stick zones show a joystick symbol; button zones show the button label
                 val displayText = if (zone.isStick) "\u2295" else zone.inputName
@@ -1613,30 +1576,17 @@ class OverlayManager(private val context: Context) {
                     val dx = e.x - cx; val dy = e.y - cy
                     val dist = sqrt(dx * dx + dy * dy)
                     dragMode = if (zone.isStick && zone.inputName.isNotBlank()) {
-                        // Only the dot itself triggers resize — not the full ring.
                         val ang = handleAngle()
                         val outerDotX = cx + cos(ang).toFloat() * zone.outerRadius
                         val outerDotY = cy + sin(ang).toFloat() * zone.outerRadius
-                        val deadDotX  = cx + cos(ang).toFloat() * zone.deadZone * zone.outerRadius
-                        val deadDotY  = cy + sin(ang).toFloat() * zone.deadZone * zone.outerRadius
                         val dOuter = sqrt((e.x - outerDotX).pow(2) + (e.y - outerDotY).pow(2))
-                        val dDead  = sqrt((e.x - deadDotX).pow(2)  + (e.y - deadDotY).pow(2))
                         when {
                             dOuter < dp(22) -> DragMode.RESIZE
-                            dDead  < dp(20) -> DragMode.DEADZONE
                             dist <= zone.outerRadius + dp(8) -> DragMode.MOVE
                             else -> return false
                         }
                     } else {
-                        val ang = handleAngle()
-                        val hx = cx + cos(ang).toFloat() * zone.innerRadius
-                        val hy = cy + sin(ang).toFloat() * zone.innerRadius
-                        val dHandle = sqrt((e.x - hx).pow(2) + (e.y - hy).pow(2))
-                        when {
-                            dHandle < dp(22) -> DragMode.RESIZE
-                            dist < zone.innerRadius + dp(20) -> DragMode.MOVE
-                            else -> return false
-                        }
+                        if (dist <= zone.innerRadius + dp(8)) DragMode.MOVE else return false
                     }
                     lastRawX = e.rawX; lastRawY = e.rawY
                     return true
@@ -1645,7 +1595,7 @@ class OverlayManager(private val context: Context) {
                     val ddx = e.rawX - lastRawX; val ddy = e.rawY - lastRawY
                     when (dragMode) {
                         DragMode.MOVE -> {
-                            if (sqrt(ddx * ddx + ddy * ddy) < dp(12) && !menuHidden) {
+                            if (sqrt(ddx * ddx + ddy * ddy) < dp(20) && !menuHidden) {
                                 lastRawX = e.rawX; lastRawY = e.rawY
                                 return true
                             }
@@ -1655,11 +1605,7 @@ class OverlayManager(private val context: Context) {
                             }
                             moveZone(ddx, ddy)
                         }
-                        DragMode.RESIZE -> {
-                            if (zone.isStick) resizeOuter(e.x - cx, e.y - cy)
-                            else resizeButton(e.x - cx, e.y - cy)
-                        }
-                        DragMode.DEADZONE -> resizeDeadZone(e.x - cx, e.y - cy)
+                        DragMode.RESIZE -> resizeOuter(e.x - cx, e.y - cy)
                         DragMode.NONE -> {}
                     }
                     lastRawX = e.rawX; lastRawY = e.rawY
@@ -1692,26 +1638,6 @@ class OverlayManager(private val context: Context) {
             layoutParams = lp
             if (zone.isStick && zone.inputName.isNotBlank())
                 repositionDebugOverlay(zone.inputName, zone.cx, zone.cy, zone.outerRadius)
-        }
-
-        private fun resizeDeadZone(localDx: Float, localDy: Float) {
-            val newR = sqrt(localDx * localDx + localDy * localDy)
-            // Clamp: 5% minimum so the dead zone never vanishes; 85% maximum so there's always room to move
-            zone.deadZone = (newR / zone.outerRadius).coerceIn(0.05f, 0.85f)
-            invalidate()
-        }
-
-        private fun resizeButton(localDx: Float, localDy: Float) {
-            zone.innerRadius = sqrt(localDx * localDx + localDy * localDy)
-                .coerceIn(dp(16).toFloat(), dp(80).toFloat())
-            DataStore.update { it.copy(buttonZoneRadius = zone.innerRadius) }
-            val newSize = viewSizeForZone(zone)
-            val lp = layoutParams as? FrameLayout.LayoutParams ?: return
-            lp.width = newSize; lp.height = newSize
-            lp.leftMargin = (zone.cx - newSize / 2f).toInt()
-            lp.topMargin = (zone.cy - newSize / 2f).toInt()
-            layoutParams = lp
-            invalidate()
         }
 
         private fun resizeOuter(localDx: Float, localDy: Float) {

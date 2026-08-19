@@ -58,6 +58,28 @@ fun AppData.resolvedOverlay(ctx: Context): OverlayRect {
             portW ?: if (overlayW != null && overlayW < (overlayH ?: Int.MAX_VALUE)) overlayW else pw,
             portH ?: if (overlayH != null && (overlayW ?: 0) < overlayH) overlayH else ph
         )
-        else -> OverlayRect(0, 0, cw, ch)
+        else -> {
+            if (ScreenSize.isLandscape(ctx)) {
+                if (landW != null && landH != null)
+                    OverlayRect(landX ?: 0, landY ?: 0, landW, landH)
+                else OverlayRect(0, 0, cw, ch)
+            } else {
+                if (portW != null && portH != null)
+                    OverlayRect(portX ?: 0, portY ?: 0, portW, portH)
+                else OverlayRect(0, 0, cw, ch)
+            }
+        }
+    }
+}
+
+/** First Auto use writes the current screen into the empty land/port slot. */
+fun AppData.seedOverlayIfNeeded(ctx: Context): AppData {
+    val (w, h) = ScreenSize.current(ctx)
+    return if (ScreenSize.isLandscape(ctx)) {
+        if (landW != null && landH != null) this
+        else copy(landX = 0, landY = 0, landW = w, landH = h)
+    } else {
+        if (portW != null && portH != null) this
+        else copy(portX = 0, portY = 0, portW = w, portH = h)
     }
 }
