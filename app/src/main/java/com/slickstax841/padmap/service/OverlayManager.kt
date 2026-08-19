@@ -22,8 +22,10 @@ import com.slickstax841.padmap.data.MappingEntry
 import com.slickstax841.padmap.data.AppData
 import com.slickstax841.padmap.data.ScreenSize
 import com.slickstax841.padmap.data.TouchAction
+import com.slickstax841.padmap.data.resolvedBinds
 import com.slickstax841.padmap.data.resolvedOverlay
 import com.slickstax841.padmap.data.seedOverlayIfNeeded
+import com.slickstax841.padmap.data.withBind
 import java.util.UUID
 import kotlin.math.*
 
@@ -113,6 +115,13 @@ class OverlayManager(private val context: Context) {
     private var configRoot: FrameLayout? = null
     private var zoneLayer: FrameLayout? = null
     private var configPanel: View? = null
+    private var layersDock: View? = null
+    private var layerCapture: String? = null
+    private val layerNumViews = arrayOfNulls<TextView>(6)
+    private var layerActView: TextView? = null
+    private var layerDeactView: TextView? = null
+    private var layerRetView: TextView? = null
+    private var overlayModeRow: LinearLayout? = null
     private var adjustMode = false
     private var adjustLayer: View? = null
     private val configParams = WindowManager.LayoutParams(
@@ -644,6 +653,13 @@ class OverlayManager(private val context: Context) {
             Gravity.CENTER
         )
         root.addView(panel, panelLp)
+        val dock = buildLayersDock()
+        layersDock = dock
+        root.addView(dock, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.START
+        ).apply { leftMargin = dp(8); topMargin = dp(8) })
         // After layout, switch to margin-based positioning so drag works correctly.
         // Restore saved position if the user has moved the panel before; otherwise centre it.
         panel.post {
@@ -800,34 +816,17 @@ class OverlayManager(private val context: Context) {
 
         panel.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(1, dp(8)) })
 
-        val layerRow = LinearLayout(context).apply {
+        val modeRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(36)
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(32)
             )
         }
-        for (i in 1..6) {
-            val n = i
-            layerRow.addView(TextView(context).apply {
-                text = n.toString()
-                textSize = 14f
-                gravity = Gravity.CENTER
-                setTextColor(if (n == editingLayer) Color.BLACK else Color.parseColor("#00BFFF"))
-                background = GradientDrawable().apply {
-                    setColor(if (n == editingLayer) Color.parseColor("#00BFFF") else Color.parseColor("#222222"))
-                    setStroke(dp(1), Color.parseColor("#00BFFF"))
-                }
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
-                setOnClickListener {
-                    if (editingLayer == n) return@setOnClickListener
-                    editingLayer = n
-                    dismissContextMenu()
-                    rebuildZoneLayer()
-                    buildConfigOverlay()
-                }
-            })
+        overlayModeRow = modeRow
+        listOf("auto" to "AUTO", "landscape" to "LAND", "portrait" to "PORT").forEach { (id, label) ->
+            modeRow.addView(overlayModeChip(id, label))
         }
-        panel.addView(layerRow)
+        panel.addView(modeRow)
         panel.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(1, dp(8)) })
 
         // Button row — WRAP_CONTENT so the card grows to fit all four actions
@@ -881,6 +880,197 @@ class OverlayManager(private val context: Context) {
         panel.addView(btnRow)
         panel.addView(buildDebugBox())
         return panel
+    }
+
+    private fun overlayModeChip(id: String, label: String): TextView {
+        val on = DataStore.data.value.overlayMode == id
+        return TextView(context).apply {
+            text = label
+            tag = id
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(if (on) Color.BLACK else Color.parseColor("#00BFFF"))
+            background = GradientDrawable().apply {
+                setColor(if (on) Color.parseColor("#00BFFF") else Color.parseColor("#222222"))
+                setStroke(dp(1), Color.parseColor("#00BFFF"))
+            }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+            setOnClickListener {
+                DataStore.update { it.copy(overlayMode = id) }
+                applyStoredOverlayFit()
+                refreshOverlayModeRow()
+            }
+        }
+    }
+
+    private fun refreshOverlayModeRow() {
+        val mode = DataStore.data.value.overlayMode
+        val row = overlayModeRow ?: return
+        for (i in 0 until row.childCount) {
+            val tv = row.getChildAt(i) as? TextView ?: continue
+            val on = tv.tag == mode
+            tv.setTextColor(if (on) Color.BLACK else Color.parseColor("#00BFFF"))
+            tv.background = GradientDrawable().apply {
+                setColor(if (on) Color.parseColor("#00BFFF") else Color.parseColor("#222222"))
+                setStroke(dp(1), Color.parseColor("#00BFFF"))
+            }
+        }
+    }
+
+    private fun buildLayersDock(): View {
+        val dock = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.argb(166, 0, 0, 0))
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(1), Color.parseColor("#00BFFF"))
+            }
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            elevation = 12f
+        }
+        val nums = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(36)
+            )
+        }
+        for (i in 1..6) {
+            val n = i
+            val tv = TextView(context).apply {
+                text = n.toString()
+                textSize = 14f
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(dp(36), LinearLayout.LayoutParams.MATCH_PARENT)
+                setOnClickListener {
+                    if (editingLayer != n) {
+                        editingLayer = n
+                        layerCapture = null
+                        dismissContextMenu()
+                        rebuildZoneLayer()
+                    }
+                    refreshLayersDock()
+                }
+            }
+            layerNumViews[i - 1] = tv
+            nums.addView(tv)
+        }
+        dock.addView(nums)
+        dock.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(1, dp(6)) })
+        val slots = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        fun slot(title: String, onClick: () -> Unit): TextView {
+            val col = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(4)
+                }
+            }
+            col.addView(TextView(context).apply {
+                text = title
+                textSize = 9f
+                setTextColor(Color.parseColor("#888888"))
+            })
+            val value = TextView(context).apply {
+                textSize = 12f
+                setTextColor(Color.parseColor("#00BFFF"))
+                setPadding(dp(6), dp(6), dp(6), dp(6))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#222222"))
+                    setStroke(dp(1), Color.parseColor("#00BFFF"))
+                    cornerRadius = dp(5).toFloat()
+                }
+                setOnClickListener { onClick() }
+            }
+            col.addView(value)
+            slots.addView(col)
+            return value
+        }
+        layerActView = slot("ACTIVATE") {
+            layerCapture = if (layerCapture == "act") null else "act"
+            refreshLayersDock()
+            keyCatcher?.requestFocus()
+        }
+        layerDeactView = slot("DEACTIVATE") {
+            layerCapture = if (layerCapture == "deact") null else "deact"
+            refreshLayersDock()
+            keyCatcher?.requestFocus()
+        }
+        layerRetView = slot("RETURN") {
+            cycleReturnLayer()
+        }
+        dock.addView(slots)
+        refreshLayersDock()
+        return dock
+    }
+
+    private fun currentLayerBind() =
+        DataStore.data.value.gameLayouts.find { it.id == editingLayoutId }
+            ?.resolvedBinds()?.find { it.index == editingLayer }
+
+    private fun cycleReturnLayer() {
+        val cur = currentLayerBind()?.returnLayer ?: 0
+        val next = if (cur == 0) 1 else if (cur >= 6) 0 else cur + 1
+        updateEditingBind { it.copy(returnLayer = next) }
+        refreshLayersDock()
+    }
+
+    private fun updateEditingBind(transform: (com.slickstax841.padmap.data.LayerBind) -> com.slickstax841.padmap.data.LayerBind) {
+        val layoutId = editingLayoutId
+        val layer = editingLayer
+        DataStore.update { data ->
+            val cur = data.gameLayouts.find { it.id == layoutId } ?: return@update data
+            val next = cur.withBind(layer, transform)
+            data.copy(gameLayouts = data.gameLayouts.map { if (it.id == cur.id) next else it })
+        }
+    }
+
+    private fun assignLayerKey(name: String) {
+        val field = layerCapture ?: return
+        updateEditingBind { b ->
+            if (field == "act") b.copy(activateName = name) else b.copy(deactivateName = name)
+        }
+        layerCapture = null
+        refreshLayersDock()
+    }
+
+    private fun refreshLayersDock() {
+        val bind = currentLayerBind()
+        for (i in 1..6) {
+            val tv = layerNumViews[i - 1] ?: continue
+            val on = i == editingLayer
+            tv.setTextColor(if (on) Color.BLACK else Color.parseColor("#00BFFF"))
+            tv.background = GradientDrawable().apply {
+                setColor(if (on) Color.parseColor("#00BFFF") else Color.parseColor("#222222"))
+                setStroke(dp(1), Color.parseColor("#00BFFF"))
+            }
+        }
+        fun paint(tv: TextView?, text: String, listening: Boolean) {
+            tv ?: return
+            tv.text = text
+            tv.setTextColor(if (listening) Color.BLACK else Color.parseColor("#00BFFF"))
+            tv.background = GradientDrawable().apply {
+                setColor(if (listening) Color.parseColor("#00BFFF") else Color.parseColor("#222222"))
+                setStroke(dp(1), Color.parseColor("#00BFFF"))
+                cornerRadius = dp(5).toFloat()
+            }
+        }
+        paint(
+            layerActView,
+            if (layerCapture == "act") "Press…" else bind?.activateName?.ifBlank { "—" } ?: "—",
+            layerCapture == "act"
+        )
+        paint(
+            layerDeactView,
+            if (layerCapture == "deact") "Press…" else bind?.deactivateName?.ifBlank { "—" } ?: "—",
+            layerCapture == "deact"
+        )
+        val ret = bind?.returnLayer ?: 0
+        paint(layerRetView, if (ret in 1..6) ret.toString() else "PREV", false)
     }
 
     private fun buildDebugBox(): View {
@@ -1056,6 +1246,7 @@ class OverlayManager(private val context: Context) {
         applyOverlayFit(configParams, forcePixels = true)
         runCatching { wm.updateViewLayout(root, configParams) }
         configPanel?.visibility = View.GONE
+        layersDock?.visibility = View.GONE
         showAdjustLayer(root)
     }
 
@@ -1244,6 +1435,7 @@ class OverlayManager(private val context: Context) {
         // Show the panel again, centred on the new overlay dimensions
         val panel = configPanel ?: return
         panel.visibility = View.VISIBLE
+        layersDock?.visibility = View.VISIBLE
         panel.post {
             val lp = panel.layoutParams as? FrameLayout.LayoutParams ?: return@post
             lp.gravity = Gravity.TOP or Gravity.START
@@ -1261,6 +1453,9 @@ class OverlayManager(private val context: Context) {
         configRoot?.let { runCatching { wm.removeView(it) } }
         configRoot = null; zoneLayer = null; zoneViews.clear(); contextMenuViews.clear()
         keyCatcher = null; adjustLayer = null; adjustMode = false; configPanel = null
+        layersDock = null; layerCapture = null; overlayModeRow = null
+        layerActView = null; layerDeactView = null; layerRetView = null
+        for (i in layerNumViews.indices) layerNumViews[i] = null
         debugLogView = null; debugBox = null
     }
 
@@ -1477,12 +1672,12 @@ class OverlayManager(private val context: Context) {
                 val above = cy - ph - gap
                 val below = cy + ch + gap
                 when {
-                    left >= 0 -> {
-                        nx = left
-                        ny = cy.coerceIn(0, (rh - ph).coerceAtLeast(0))
-                    }
                     right + pw <= rw -> {
                         nx = right
+                        ny = cy.coerceIn(0, (rh - ph).coerceAtLeast(0))
+                    }
+                    left >= 0 -> {
+                        nx = left
                         ny = cy.coerceIn(0, (rh - ph).coerceAtLeast(0))
                     }
                     above >= 0 -> {
@@ -1636,16 +1831,18 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun handleButtonAssignment(keyCode: Int) {
-        if (pendingZoneId == null) return
         val preset = DataStore.data.value.gameLayouts.find { it.id == editingLayoutId }
             ?.let { l -> DataStore.data.value.controllerPresets.find { it.id == l.controllerPresetId } }
         val label = preset?.buttons?.get(keyCode) ?: keyCodeLabel(keyCode)
+        if (layerCapture != null) {
+            assignLayerKey(label)
+            return
+        }
+        if (pendingZoneId == null) return
         assignPendingZone(label, false)
     }
 
     private fun handleAxisAssignment(axisCode: Int, value: Float) {
-        if (pendingZoneId == null) return
-        // D-pad HAT axes are directions, not analog sticks — resolve to a button label
         if (axisCode == MotionEvent.AXIS_HAT_X || axisCode == MotionEvent.AXIS_HAT_Y) {
             val label = when {
                 axisCode == MotionEvent.AXIS_HAT_X && value < 0 -> "D-Left"
@@ -1653,9 +1850,15 @@ class OverlayManager(private val context: Context) {
                 axisCode == MotionEvent.AXIS_HAT_Y && value < 0 -> "D-Up"
                 else                                             -> "D-Down"
             }
+            if (layerCapture != null) {
+                assignLayerKey(label)
+                return
+            }
+            if (pendingZoneId == null) return
             assignPendingZone(label, false)
             return
         }
+        if (pendingZoneId == null) return
         val preset = DataStore.data.value.gameLayouts.find { it.id == editingLayoutId }
             ?.let { l -> DataStore.data.value.controllerPresets.find { it.id == l.controllerPresetId } }
         val raw = preset?.axes?.get(axisCode) ?: axisCodeLabel(axisCode)
@@ -2110,6 +2313,7 @@ class OverlayManager(private val context: Context) {
         highlightZone(null)
         contextMenuViews.forEach { (it.parent as? ViewGroup)?.removeView(it) }
         contextMenuViews.clear()
+        layersDock?.visibility = View.GONE
         panel.visibility = View.GONE
     }
 
@@ -2122,6 +2326,7 @@ class OverlayManager(private val context: Context) {
         lp.topMargin = panelTopBeforeTune
         panel.layoutParams = lp
         panel.visibility = View.VISIBLE
+        layersDock?.visibility = View.VISIBLE
     }
 
     private fun showTuningBox(zoneId: String, label: String, zoneCx: Float, zoneCy: Float) {

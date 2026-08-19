@@ -49,11 +49,6 @@ import com.slickstax841.padmap.data.ControllerPreset
 import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.data.GameLayout
 import com.slickstax841.padmap.data.GameScanner
-import com.slickstax841.padmap.data.resolvedBinds
-import com.slickstax841.padmap.data.resolvedOverlay
-import com.slickstax841.padmap.data.seedOverlayIfNeeded
-import com.slickstax841.padmap.data.withBind
-import com.slickstax841.padmap.ControllerEventBus
 import com.slickstax841.padmap.inject.SidecarClient
 import com.slickstax841.padmap.inject.SidecarHost
 import com.slickstax841.padmap.service.OverlayManager
@@ -321,20 +316,6 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
 
             item {
                 Spacer(Modifier.height(4.dp))
-                SectionLabel("OVERLAY")
-                Spacer(Modifier.height(6.dp))
-                OverlayFitBlock()
-            }
-
-            item {
-                Spacer(Modifier.height(4.dp))
-                SectionLabel("LAYERS")
-                Spacer(Modifier.height(6.dp))
-                LayersBlock()
-            }
-
-            item {
-                Spacer(Modifier.height(4.dp))
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     SectionLabel("CONTROLLER PRESETS")
                     TextButton(onClick = {
@@ -440,171 +421,6 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
             item { Spacer(Modifier.height(40.dp)) }
         }
     }
-}
-
-@Composable
-private fun OverlayFitBlock() {
-    val ctx = LocalContext.current
-    val skin = LocalAppSkin.current
-    val appData by DataStore.data.collectAsState()
-    LaunchedEffect(Unit) {
-        val seeded = DataStore.data.value.seedOverlayIfNeeded(ctx)
-        if (seeded !== DataStore.data.value) DataStore.update { seeded }
-    }
-    val mode = appData.overlayMode
-    val rect = appData.resolvedOverlay(ctx)
-    val sizeText = "${if (mode == "auto") "Auto  " else ""}${rect.w} \u00d7 ${rect.h}"
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(skin.surfaceCol)) {
-        Row(Modifier.fillMaxWidth()) {
-            listOf("auto" to "AUTO", "landscape" to "LANDSCAPE", "portrait" to "PORTRAIT").forEach { (id, label) ->
-                val on = mode == id
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .clickable {
-                            DataStore.update { it.copy(overlayMode = id) }
-                            OverlayManager.instance?.applyStoredOverlayFit()
-                        }
-                        .background(if (on) skin.accent else Color.Transparent)
-                        .border(1.dp, skin.accent)
-                        .padding(vertical = 12.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        label,
-                        color = if (on) Color.Black else skin.accent,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp
-                    )
-                }
-            }
-        }
-        Text(
-            sizeText,
-            color = skin.textSecondary,
-            fontSize = 12.sp,
-            modifier = Modifier.padding(10.dp)
-        )
-    }
-}
-
-@Composable
-private fun LayersBlock() {
-    val skin = LocalAppSkin.current
-    val appData by DataStore.data.collectAsState()
-    val layout = appData.gameLayouts.find { it.id == appData.activeLayoutId && !it.archived }
-    var selected by remember { mutableIntStateOf(1) }
-    var capturing by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(capturing, layout?.id) {
-        if (capturing == null || layout == null) return@LaunchedEffect
-        ControllerEventBus.keyEvents.collect { ev ->
-            if (ev.action != KeyEvent.ACTION_DOWN || ev.repeatCount > 0) return@collect
-            val name = homeKeyLabel(ev.keyCode)
-            val field = capturing ?: return@collect
-            DataStore.update { data ->
-                val cur = data.gameLayouts.find { it.id == layout.id } ?: return@update data
-                val next = cur.withBind(selected) { b ->
-                    if (field == "act") b.copy(activateName = name) else b.copy(deactivateName = name)
-                }
-                data.copy(gameLayouts = data.gameLayouts.map { if (it.id == cur.id) next else it })
-            }
-            capturing = null
-        }
-    }
-
-    if (layout == null) {
-        EmptyHint("Select a game layout to set layer keys.")
-        return
-    }
-    val binds = layout.resolvedBinds()
-    val bind = binds.find { it.index == selected } ?: binds.first()
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(skin.surfaceCol)) {
-        Row(Modifier.fillMaxWidth(), Arrangement.Start) {
-            for (n in 1..6) {
-                val on = n == selected
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .aspectRatio(1f)
-                        .background(if (on) skin.accent else Color.Transparent)
-                        .border(1.dp, skin.accent)
-                        .clickable { selected = n; capturing = null },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        n.toString(),
-                        color = if (on) Color.Black else skin.accent,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
-                    )
-                }
-            }
-        }
-        Row(Modifier.fillMaxWidth().padding(10.dp), Arrangement.spacedBy(8.dp)) {
-            LayerAssignSlot(
-                title = "ACTIVATE",
-                value = bind.activateName,
-                listening = capturing == "act",
-                modifier = Modifier.weight(1f),
-                onClick = { capturing = if (capturing == "act") null else "act" }
-            )
-            LayerAssignSlot(
-                title = "DEACTIVATE",
-                value = bind.deactivateName,
-                listening = capturing == "deact",
-                modifier = Modifier.weight(1f),
-                onClick = { capturing = if (capturing == "deact") null else "deact" }
-            )
-        }
-    }
-}
-
-@Composable
-private fun LayerAssignSlot(
-    title: String,
-    value: String,
-    listening: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    val skin = LocalAppSkin.current
-    Column(
-        modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (listening) skin.accent.copy(alpha = 0.25f) else skin.surfaceCol)
-            .border(1.dp, if (listening) skin.accent else skin.textSecondary.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick)
-            .padding(10.dp)
-    ) {
-        Text(title, fontSize = 10.sp, color = skin.textSecondary, letterSpacing = 1.sp)
-        Text(
-            if (listening) "Press a button…" else value.ifBlank { "None" },
-            color = skin.textPrimary,
-            fontWeight = FontWeight.Medium,
-            fontSize = 14.sp
-        )
-    }
-}
-
-private fun homeKeyLabel(code: Int) = when (code) {
-    KeyEvent.KEYCODE_BUTTON_A -> "A"
-    KeyEvent.KEYCODE_BUTTON_B -> "B"
-    KeyEvent.KEYCODE_BUTTON_X -> "X"
-    KeyEvent.KEYCODE_BUTTON_Y -> "Y"
-    KeyEvent.KEYCODE_BUTTON_L1 -> "LB"
-    KeyEvent.KEYCODE_BUTTON_R1 -> "RB"
-    KeyEvent.KEYCODE_BUTTON_L2 -> "LT"
-    KeyEvent.KEYCODE_BUTTON_R2 -> "RT"
-    KeyEvent.KEYCODE_BUTTON_THUMBL -> "L3"
-    KeyEvent.KEYCODE_BUTTON_THUMBR -> "R3"
-    KeyEvent.KEYCODE_BUTTON_START -> "Start"
-    KeyEvent.KEYCODE_BUTTON_SELECT -> "Select"
-    KeyEvent.KEYCODE_DPAD_UP -> "D-Up"
-    KeyEvent.KEYCODE_DPAD_DOWN -> "D-Down"
-    KeyEvent.KEYCODE_DPAD_LEFT -> "D-Left"
-    KeyEvent.KEYCODE_DPAD_RIGHT -> "D-Right"
-    else -> "Btn$code"
 }
 
 @Composable private fun SectionLabel(text: String) {

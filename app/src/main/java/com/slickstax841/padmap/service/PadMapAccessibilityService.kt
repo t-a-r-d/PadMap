@@ -104,6 +104,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     private var playingPackage: String = ""
     var activeLayer: Int = 1
         private set
+    private var layerBeforeActivate = 1
     val playingPackageDebug: String get() = playingPackage
     val debugExtras: String
         get() = "mux=$muxBoth turboJobs=${turboJobs.size} walk=${walkJobs.size} " +
@@ -520,7 +521,13 @@ class PadMapAccessibilityService : AccessibilityService() {
                 KeyEvent.ACTION_DOWN -> {
                     if (event.repeatCount > 0) return mappedHere
                     if (mappedHere && sidecarReady()) onButtonDown(label)
-                    if (isAct) switchLayer(bind.index) else switchLayer(1)
+                    if (isAct) {
+                        if (activeLayer != bind.index) layerBeforeActivate = activeLayer
+                        switchLayer(bind.index)
+                    } else {
+                        val dest = if (bind.returnLayer in 1..6) bind.returnLayer else layerBeforeActivate
+                        switchLayer(dest)
+                    }
                     return mappedHere
                 }
                 KeyEvent.ACTION_UP -> {

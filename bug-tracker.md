@@ -224,6 +224,27 @@ Button options should size the zone with a scrubber on an arc from 8 o’clock (
 
 ---
 
+## BUG-024 — Overlay mode and layer binds live in the app Home, not the overlay
+
+**Status:** in progress
+**Reported:** 2026-08-19
+
+AUTO/LAND/PORT belong in the overlay editor. Layer activate/deactivate belong top-left of the overlay home, not inside the home card, with a third RETURN layer (default previous).
+
+### Cause
+
+HomeScreen owned OverlayFitBlock and LayersBlock. Overlay home card had only the 1–6 edit row. Deactivate always switched to layer 1.
+
+### Attempts
+
+- [in progress] Mode chips on the overlay home card. Layers dock top-left: 1–6, ACTIVATE, DEACTIVATE, RETURN. Deactivate uses returnLayer or the layer in use before activate.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-023 — Playback debug too thin to diagnose crashes
 
 **Status:** in progress

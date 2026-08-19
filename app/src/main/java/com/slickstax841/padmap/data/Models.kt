@@ -17,7 +17,9 @@ data class ControllerPreset(
 data class LayerBind(
     val index: Int = 1,
     val activateName: String = "",
-    val deactivateName: String = ""
+    val deactivateName: String = "",
+    // 0 = layer that was active before this one opened (in-game menu close).
+    val returnLayer: Int = 0
 )
 
 @Serializable
