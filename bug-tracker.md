@@ -203,6 +203,27 @@ The overlay home card clips SAVE on the right edge. ADJUST, DEBUG, CLEAR, SAVE d
 
 ---
 
+## BUG-017 — Button size +/-; LT/RT repeat-tap on hold
+
+**Status:** in progress
+**Reported:** 2026-08-19
+
+Button options should size the zone with a scrubber on an arc from 8 o’clock (smallest) over the top to 2 o’clock (largest), not −/+. Holding LT/RT repeat-taps; they must hold. Repeat only via turbo.
+
+### Cause
+
+`showContextMenu` uses −/+. Analog triggers keep sending extra `ACTION_DOWN` (repeatCount 0). `onButtonDown` releases and restarts the hold on re-down, which looks like turbo. Analog LT/RT axes are not turned into a single press/release.
+
+### Attempts
+
+- [in progress] Arc scrubber on the options disc (8→2 over the top). Trigger axes with hysteresis; ignore LT/RT re-down while already holding; key-up ignored while the analog trigger is still down.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-016 — Stick needs a toggleable walk-tap zone; drop COPY
 
 **Status:** in progress

@@ -957,8 +957,8 @@ class OverlayManager(private val context: Context) {
         ))
     }
 
-    private fun bumpButtonSize(zone: ZoneData, delta: Float) {
-        zone.innerRadius = (zone.innerRadius + delta).coerceIn(dp(16).toFloat(), dp(80).toFloat())
+    private fun setButtonSize(zone: ZoneData, radius: Float) {
+        zone.innerRadius = radius.coerceIn(dp(16).toFloat(), dp(80).toFloat())
         DataStore.update { it.copy(buttonZoneRadius = zone.innerRadius) }
         val v = zoneViews[zone.id] ?: return
         val newSize = viewSizeForZone(zone)
@@ -1277,15 +1277,6 @@ class OverlayManager(private val context: Context) {
             rebuildZoneLayer()
         })
 
-        if (!zone.isStick && zone.isPlaced) {
-            buttons.add(BtnSpec("\u2212", Color.parseColor("#007A99")) {
-                bumpButtonSize(zone, -8f)
-            })
-            buttons.add(BtnSpec("+", Color.parseColor("#007A99")) {
-                bumpButtonSize(zone, 8f)
-            })
-        }
-
         // LOOK / MOVE toggle — stick zones only, must be assigned
         // ⊕ = Move (position-based locomotion), ◎ = Look (velocity-based camera)
         if (zone.isStick && zone.inputName.isNotBlank()) {
@@ -1322,7 +1313,10 @@ class OverlayManager(private val context: Context) {
         val gap = dp(12)
         val pad = dp(14)
         val orbit = btnSize + gap
-        val clusterSize = (orbit + btnSize / 2 + pad) * 2
+        val discSize = (orbit + btnSize / 2 + pad) * 2
+        val showSize = !zone.isStick && zone.isPlaced
+        val trackPad = if (showSize) dp(22) else 0
+        val clusterSize = discSize + trackPad * 2
 
         fun optionBtn(spec: BtnSpec) = TextView(context).apply {
             text = spec.icon
@@ -1340,27 +1334,39 @@ class OverlayManager(private val context: Context) {
         val cluster = FrameLayout(context).apply {
             isClickable = true
             elevation = 16f
+        }
+        val disc = FrameLayout(context).apply {
+            isClickable = true
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(Color.argb(200, 0, 0, 0))
                 setStroke(dp(2), Color.parseColor("#FF8C00"))
             }
         }
-
-        val mid = (clusterSize - btnSize) / 2
+        val mid = (discSize - btnSize) / 2
         val moveBtn = optionBtn(BtnSpec("\u271B", Color.parseColor("#336699"), null))
-        cluster.addView(moveBtn, FrameLayout.LayoutParams(btnSize, btnSize).apply {
+        disc.addView(moveBtn, FrameLayout.LayoutParams(btnSize, btnSize).apply {
             leftMargin = mid
             topMargin = mid
         })
         buttons.forEachIndexed { i, spec ->
             val angle = -Math.PI / 2.0 + 2.0 * Math.PI * i / buttons.size
-            val cx = clusterSize / 2f + cos(angle).toFloat() * orbit - btnSize / 2f
-            val cy = clusterSize / 2f + sin(angle).toFloat() * orbit - btnSize / 2f
-            cluster.addView(optionBtn(spec), FrameLayout.LayoutParams(btnSize, btnSize).apply {
+            val cx = discSize / 2f + cos(angle).toFloat() * orbit - btnSize / 2f
+            val cy = discSize / 2f + sin(angle).toFloat() * orbit - btnSize / 2f
+            disc.addView(optionBtn(spec), FrameLayout.LayoutParams(btnSize, btnSize).apply {
                 leftMargin = cx.toInt()
                 topMargin = cy.toInt()
             })
+        }
+        cluster.addView(disc, FrameLayout.LayoutParams(discSize, discSize).apply {
+            leftMargin = trackPad
+            topMargin = trackPad
+        })
+        if (showSize) {
+            cluster.addView(
+                SizeScrubberView(context, zone, discSize),
+                FrameLayout.LayoutParams(clusterSize, clusterSize)
+            )
         }
 
         val overlayW = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels)
@@ -1871,6 +1877,88 @@ class OverlayManager(private val context: Context) {
             canvas.drawLine(m, h-m-len, m, h-m, p); canvas.drawLine(m, h-m, m+len, h-m, p)
             // Bottom-right
             canvas.drawLine(w-m-len, h-m, w-m, h-m, p); canvas.drawLine(w-m, h-m, w-m, h-m-len, p)
+        }
+    }
+
+    // Arc from 8 o'clock (min) over the top to 2 o'clock (max). Canvas 0° = 3 o'clock, CW+.
+    @SuppressLint("ViewConstructor")
+    private inner class SizeScrubberView(
+        ctx: Context,
+        private val zone: ZoneData,
+        private val discPx: Int
+    ) : View(ctx) {
+        private val minR = dp(16).toFloat()
+        private val maxR = dp(80).toFloat()
+        private val thumbR = dp(9).toFloat()
+        private val hit = dp(22).toFloat()
+        private var dragging = false
+        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeWidth = dp(5).toFloat()
+            color = Color.parseColor("#FF8C00")
+            alpha = 160
+        }
+        private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.parseColor("#FF8C00")
+        }
+        private val thumbRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2).toFloat()
+            color = Color.WHITE
+        }
+
+        private fun trackRadius() = discPx / 2f + dp(6)
+        private fun sizeToT() = ((zone.innerRadius - minR) / (maxR - minR)).coerceIn(0f, 1f)
+        private fun applyDeg(deg: Double) {
+            val t = ((deg.coerceIn(150.0, 330.0) - 150.0) / 180.0).toFloat()
+            setButtonSize(zone, minR + t * (maxR - minR))
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val cx = width / 2f
+            val cy = height / 2f
+            val r = trackRadius()
+            canvas.drawArc(cx - r, cy - r, cx + r, cy + r, 150f, -180f, false, trackPaint)
+            val ang = Math.toRadians(150.0 - 180.0 * sizeToT())
+            val tx = cx + cos(ang).toFloat() * r
+            val ty = cy + sin(ang).toFloat() * r
+            canvas.drawCircle(tx, ty, thumbR, thumbPaint)
+            canvas.drawCircle(tx, ty, thumbR, thumbRing)
+        }
+
+        override fun onTouchEvent(e: MotionEvent): Boolean {
+            val cx = width / 2f
+            val cy = height / 2f
+            val dx = e.x - cx
+            val dy = e.y - cy
+            val dist = sqrt(dx * dx + dy * dy)
+            var deg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble()))
+            if (deg < 0) deg += 360.0
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    if (kotlin.math.abs(dist - trackRadius()) <= hit && deg in 150.0..330.0) {
+                        dragging = true
+                        parent.requestDisallowInterceptTouchEvent(true)
+                        applyDeg(deg)
+                        return true
+                    }
+                    return false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!dragging) return false
+                    applyDeg(deg)
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (!dragging) return false
+                    dragging = false
+                    return true
+                }
+            }
+            return dragging
         }
     }
 

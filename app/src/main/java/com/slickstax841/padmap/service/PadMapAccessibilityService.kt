@@ -74,6 +74,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     private val walkJobs = mutableMapOf<String, Job>()
     private val axisValues = mutableMapOf<String, Pair<Float, Float>>()
     private val hatState = mutableMapOf<String, Boolean>()
+    private val triggerState = mutableMapOf<String, Boolean>()
     private val stickDeadTicks = mutableMapOf<String, Int>()
     private var inFlightTaps = 0
     private var playbackGen = 0
@@ -229,6 +230,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         }
         stickDeadTicks.clear()
         hatState.clear()
+        triggerState.clear()
         SidecarClient.releaseAll()
         inFlightTaps = 0
         playbackGen++
@@ -296,6 +298,8 @@ class PadMapAccessibilityService : AccessibilityService() {
 
         processHatAxis(event, layout, MotionEvent.AXIS_HAT_X, "D-Left", "D-Right")
         processHatAxis(event, layout, MotionEvent.AXIS_HAT_Y, "D-Up", "D-Down")
+        processTriggerAxis(event, layout, "LT", MotionEvent.AXIS_LTRIGGER, MotionEvent.AXIS_BRAKE)
+        processTriggerAxis(event, layout, "RT", MotionEvent.AXIS_RTRIGGER, MotionEvent.AXIS_GAS)
 
         for ((axisCode, axisLabelStr) in axes) {
             if (axisCode == MotionEvent.AXIS_HAT_X || axisCode == MotionEvent.AXIS_HAT_Y) continue
@@ -483,6 +487,8 @@ class PadMapAccessibilityService : AccessibilityService() {
                 return true
             }
             KeyEvent.ACTION_UP -> {
+                // Analog trigger still down — key bounce must not end the hold.
+                if ((label == "LT" || label == "RT") && triggerState[label] == true) return true
                 onButtonUp(label)
                 return true
             }
@@ -550,6 +556,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         if (nonTurbo.isNotEmpty()) {
             if (activeHolds.containsKey(label)) {
                 PlaybackDebug.log("btn $label re-down")
+                if (label == "LT" || label == "RT") return
                 releaseHold(label)
             }
             startHold(label, nonTurbo)
@@ -797,6 +804,18 @@ class PadMapAccessibilityService : AccessibilityService() {
         if (mag < deadZone) return 0f to 0f
         val scale = ((mag - deadZone) / (1f - deadZone)).coerceIn(0f, 1f)
         return (rawX / mag * scale) to (rawY / mag * scale)
+    }
+
+    private fun processTriggerAxis(
+        event: MotionEvent, layout: GameLayout, label: String, primary: Int, alt: Int
+    ) {
+        if (layerMappings(layout).none { it.inputName == label }) return
+        val value = maxOf(event.getAxisValue(primary), event.getAxisValue(alt))
+        val was = triggerState[label] == true
+        val now = if (was) value > 0.35f else value > 0.55f
+        if (now && !was) onButtonDown(label)
+        if (!now && was) onButtonUp(label)
+        triggerState[label] = now
     }
 
     private fun processHatAxis(
