@@ -60,7 +60,7 @@ class OverlayManager(private val context: Context) {
     }
 
     enum class State { FLOATING, CONFIG }
-    private enum class DragMode { NONE, MOVE, RESIZE, DEADZONE }
+    private enum class DragMode { NONE, MOVE, RESIZE }
 
     var state = State.FLOATING
         private set
