@@ -945,8 +945,6 @@ class OverlayManager(private val context: Context) {
     private fun showAdjustLayer(root: FrameLayout) {
         var dragStartRawX = 0f; var dragStartRawY = 0f
         var winStartX = 0; var winStartY = 0
-        var resizeStartRawX = 0f; var resizeStartRawY = 0f
-        var winStartW = 0; var winStartH = 0
         // per-edge drag state: [startRaw], [startParam1, startParam2?]
         val topRaw = floatArrayOf(0f);   val topP  = intArrayOf(0, 0)
         val botRaw = floatArrayOf(0f);   val botP  = intArrayOf(0)
@@ -981,7 +979,7 @@ class OverlayManager(private val context: Context) {
 
         // Instruction label — centred, slightly above the Save button
         layer.addView(TextView(context).apply {
-            text = "DRAG BACKGROUND TO MOVE \u2022 DRAG EDGES TO RESIZE"
+            text = "DRAG MIDDLE TO MOVE \u2022 DRAG ANY EDGE TO RESIZE"
             textSize = 11f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
@@ -1014,156 +1012,103 @@ class OverlayManager(private val context: Context) {
             Gravity.CENTER_HORIZONTAL or Gravity.CENTER_VERTICAL
         ).apply { topMargin = dp(52) })
 
-        // Returns a wide flat filled-triangle arrow View for the given edge.
-        // direction: 0=UP(top edge)  1=DOWN(bottom edge)  2=LEFT  3=RIGHT
-        fun arrowView(direction: Int, wDp: Int, hDp: Int): View =
-            object : View(context) {
-                private val arrowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                    color = Color.parseColor("#00BFFF")
-                    style = android.graphics.Paint.Style.FILL
-                }
-                override fun onDraw(canvas: android.graphics.Canvas) {
-                    val w = width.toFloat(); val h = height.toFloat()
-                    val path = android.graphics.Path()
-                    when (direction) {
-                        0 -> { path.moveTo(w / 2f, 0f); path.lineTo(w, h); path.lineTo(0f, h) }
-                        1 -> { path.moveTo(0f, 0f);     path.lineTo(w, 0f); path.lineTo(w / 2f, h) }
-                        2 -> { path.moveTo(0f, h / 2f); path.lineTo(w, 0f); path.lineTo(w, h) }
-                        3 -> { path.moveTo(w, h / 2f);  path.lineTo(0f, 0f); path.lineTo(0f, h) }
-                    }
-                    path.close()
-                    canvas.drawPath(path, arrowPaint)
-                }
-            }.apply {
-                minimumWidth = dp(wDp); minimumHeight = dp(hDp)
-                setWillNotDraw(false)
-            }
+        val band = dp(52)
+        fun edgeStrip(color: Int) = View(context).apply {
+            setBackgroundColor(color)
+        }
+        val stripColor = Color.argb(90, 0, 191, 255)
 
-        // ── TOP edge handle — wide flat arrow pointing UP, moves top edge ────
-        val topArrow = arrowView(0, 80, 30)
-        topArrow.setOnTouchListener { _, e ->
+        val topStrip = edgeStrip(stripColor)
+        topStrip.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
                     topRaw[0] = e.rawY
-                    topP[0]   = configParams.y
-                    topP[1]   = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
+                    topP[0] = configParams.y
+                    topP[1] = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val delta  = (e.rawY - topRaw[0]).toInt()
-                    val newH   = (topP[1] - delta).coerceAtLeast(minH())
-                    val actual = topP[1] - newH
-                    configParams.y      = topP[0] + actual
+                    val delta = (e.rawY - topRaw[0]).toInt()
+                    val newH = (topP[1] - delta).coerceAtLeast(minH())
+                    configParams.y = topP[0] + (topP[1] - newH)
                     configParams.height = newH
                     runCatching { wm.updateViewLayout(configRoot, configParams) }
                     true
                 }
-                MotionEvent.ACTION_UP -> true
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
                 else -> false
             }
         }
-        layer.addView(topArrow, FrameLayout.LayoutParams(dp(80), dp(30), Gravity.TOP or Gravity.CENTER_HORIZONTAL)
-            .apply { topMargin = dp(20) })
+        layer.addView(topStrip, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, band, Gravity.TOP
+        ))
 
-        // ── BOTTOM edge handle — wide flat arrow pointing DOWN ────────────────
-        val botArrow = arrowView(1, 80, 30)
-        botArrow.setOnTouchListener { _, e ->
+        val botStrip = edgeStrip(stripColor)
+        botStrip.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
                     botRaw[0] = e.rawY
-                    botP[0]   = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
+                    botP[0] = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val delta = (e.rawY - botRaw[0]).toInt()
-                    configParams.height = (botP[0] + delta).coerceAtLeast(minH())
+                    configParams.height = (botP[0] + (e.rawY - botRaw[0]).toInt()).coerceAtLeast(minH())
                     runCatching { wm.updateViewLayout(configRoot, configParams) }
                     true
                 }
-                MotionEvent.ACTION_UP -> true
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
                 else -> false
             }
         }
-        layer.addView(botArrow, FrameLayout.LayoutParams(dp(80), dp(30), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
-            .apply { bottomMargin = dp(20) })
+        layer.addView(botStrip, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, band, Gravity.BOTTOM
+        ))
 
-        // ── LEFT edge handle — wide flat arrow pointing LEFT ──────────────────
-        val lefArrow = arrowView(2, 30, 80)
-        lefArrow.setOnTouchListener { _, e ->
+        val lefStrip = edgeStrip(stripColor)
+        lefStrip.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
                     lefRaw[0] = e.rawX
-                    lefP[0]   = configParams.x
-                    lefP[1]   = configParams.width.takeIf { it > 0 } ?: dm.widthPixels
+                    lefP[0] = configParams.x
+                    lefP[1] = configParams.width.takeIf { it > 0 } ?: dm.widthPixels
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val delta  = (e.rawX - lefRaw[0]).toInt()
-                    val newW   = (lefP[1] - delta).coerceAtLeast(minW())
-                    val actual = lefP[1] - newW
-                    configParams.x     = lefP[0] + actual
+                    val delta = (e.rawX - lefRaw[0]).toInt()
+                    val newW = (lefP[1] - delta).coerceAtLeast(minW())
+                    configParams.x = lefP[0] + (lefP[1] - newW)
                     configParams.width = newW
                     runCatching { wm.updateViewLayout(configRoot, configParams) }
                     true
                 }
-                MotionEvent.ACTION_UP -> true
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
                 else -> false
             }
         }
-        layer.addView(lefArrow, FrameLayout.LayoutParams(dp(30), dp(80), Gravity.START or Gravity.CENTER_VERTICAL)
-            .apply { marginStart = dp(20) })
+        layer.addView(lefStrip, FrameLayout.LayoutParams(
+            band, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.START
+        ))
 
-        // ── RIGHT edge handle — wide flat arrow pointing RIGHT ────────────────
-        val rigArrow = arrowView(3, 30, 80)
-        rigArrow.setOnTouchListener { _, e ->
+        val rigStrip = edgeStrip(stripColor)
+        rigStrip.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
                     rigRaw[0] = e.rawX
-                    rigP[0]   = configParams.width.takeIf { it > 0 } ?: dm.widthPixels
+                    rigP[0] = configParams.width.takeIf { it > 0 } ?: dm.widthPixels
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val delta = (e.rawX - rigRaw[0]).toInt()
-                    configParams.width = (rigP[0] + delta).coerceAtLeast(minW())
+                    configParams.width = (rigP[0] + (e.rawX - rigRaw[0]).toInt()).coerceAtLeast(minW())
                     runCatching { wm.updateViewLayout(configRoot, configParams) }
                     true
                 }
-                MotionEvent.ACTION_UP -> true
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
                 else -> false
             }
         }
-        layer.addView(rigArrow, FrameLayout.LayoutParams(dp(30), dp(80), Gravity.END or Gravity.CENTER_VERTICAL)
-            .apply { marginEnd = dp(20) })
-
-        // Corner resize handle — bottom-right (diagonal convenience)
-        layer.addView(TextView(context).apply {
-            text = "\u25E2"
-            textSize = 28f
-            setTextColor(Color.WHITE)
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            setOnTouchListener { _, e ->
-                when (e.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        resizeStartRawX = e.rawX; resizeStartRawY = e.rawY
-                        winStartW = configParams.width.takeIf  { it > 0 } ?: dm.widthPixels
-                        winStartH = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        configParams.width  = (winStartW + (e.rawX - resizeStartRawX).toInt()).coerceAtLeast(minW())
-                        configParams.height = (winStartH + (e.rawY - resizeStartRawY).toInt()).coerceAtLeast(minH())
-                        runCatching { wm.updateViewLayout(configRoot, configParams) }
-                        true
-                    }
-                    MotionEvent.ACTION_UP -> true
-                    else -> false
-                }
-            }
-        }, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM or Gravity.END
-        ).apply { bottomMargin = dp(36); marginEnd = dp(36) })
+        layer.addView(rigStrip, FrameLayout.LayoutParams(
+            band, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.END
+        ))
 
         adjustLayer = layer
         root.addView(layer, FrameLayout.LayoutParams(
