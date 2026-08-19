@@ -557,6 +557,7 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun enterConfigMode() {
+        PlaybackDebug.log("overlay CONFIG")
         state = State.CONFIG
         hidePlayCatcher()
         iconView?.visibility = View.GONE
@@ -568,6 +569,7 @@ class OverlayManager(private val context: Context) {
         // configGamePackage was set when config was opened — no DataStore lookup needed
         // and no timing race with async DataStore.update for newly created layouts.
         val gamePackage = configGamePackage
+        PlaybackDebug.log("overlay FLOATING")
 
         state = State.FLOATING
         pendingZoneId = null
@@ -900,7 +902,7 @@ class OverlayManager(private val context: Context) {
             setTextColor(Color.parseColor("#DDDDDD"))
             typeface = android.graphics.Typeface.MONOSPACE
             setPadding(0, dp(6), 0, 0)
-            maxHeight = dp(180)
+            maxHeight = dp(240)
         }
         debugLogView = log
         box.addView(log)

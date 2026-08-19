@@ -224,6 +224,27 @@ Button options should size the zone with a scrubber on an arc from 8 o’clock (
 
 ---
 
+## BUG-023 — Playback debug too thin to diagnose crashes
+
+**Status:** in progress
+**Reported:** 2026-08-19
+
+Need a fuller event sequence (buttons, sticks, mux, wrap, crash) that survives process death, plus SHARE to paste here.
+
+### Cause
+
+`PlaybackDebug` kept 50 in-memory lines, throttled motion hard, and died with the process. Overlay SHARE existed; Settings only shared the injector dump.
+
+### Attempts
+
+- [in progress] 400-line ring written to file, crash hook, richer snapshot, SHARE PLAYBACK in Settings.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-022 — Zone settings lost; look jumps at the edge
 
 **Status:** in progress

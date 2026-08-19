@@ -71,6 +71,26 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             Spacer(Modifier.height(32.dp))
 
+            Text("PLAYBACK LOG", fontSize = 11.sp, color = skin.textSecondary, letterSpacing = 2.sp,
+                fontFamily = skin.labelFont)
+            Spacer(Modifier.height(8.dp))
+            val playCtx = LocalContext.current
+            TextButton(
+                onClick = {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, "PadMap playback debug")
+                        putExtra(Intent.EXTRA_TEXT, com.slickstax841.padmap.service.PlaybackDebug.snapshot())
+                    }
+                    playCtx.startActivity(Intent.createChooser(send, "Share playback debug"))
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("SHARE PLAYBACK", color = skin.accent, fontSize = 12.sp)
+            }
+
+            Spacer(Modifier.height(24.dp))
+
             Text("INJECTOR", fontSize = 11.sp, color = skin.textSecondary, letterSpacing = 2.sp,
                 fontFamily = skin.labelFont)
             Spacer(Modifier.height(12.dp))

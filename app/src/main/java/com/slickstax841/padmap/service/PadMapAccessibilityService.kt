@@ -104,6 +104,10 @@ class PadMapAccessibilityService : AccessibilityService() {
     private var playingPackage: String = ""
     var activeLayer: Int = 1
         private set
+    val playingPackageDebug: String get() = playingPackage
+    val debugExtras: String
+        get() = "mux=$muxBoth turboJobs=${turboJobs.size} walk=${walkJobs.size} " +
+            "freePid=${freePointerIds.size} turboDown=${turboDown.size} inFlight=$inFlightTaps"
 
     private val stickRunnable = object : Runnable {
         override fun run() {
@@ -199,6 +203,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         OverlayManager.instance?.startService()
         startKeepAlive()
         SidecarClient.ping()
+        PlaybackDebug.log("a11y connected")
     }
 
     private fun startKeepAlive() {
@@ -225,6 +230,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        PlaybackDebug.log("a11y destroy")
         super.onDestroy()
         instance = null
         scope.cancel()
@@ -254,6 +260,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     fun disableAndStop() {
+        PlaybackDebug.log("disableAndStop")
         OverlayManager.instance?.detach()
         OverlayManager.instance = null
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
@@ -318,6 +325,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
+        PlaybackDebug.log("taskRemoved")
         super.onTaskRemoved(rootIntent)
     }
 
@@ -814,7 +822,9 @@ class PadMapAccessibilityService : AccessibilityService() {
         }
         val lookLive = moving.any { it.second.lookMode }
         val moveLive = moving.any { !it.second.lookMode }
-        muxBoth = lookLive && moveLive
+        val both = lookLive && moveLive
+        if (both != muxBoth) PlaybackDebug.log("mux both=$both look=$lookLive move=$moveLive")
+        muxBoth = both
         if (muxBoth) muxLookTurn = !muxLookTurn
 
         for ((label, state) in moving) {
@@ -859,6 +869,9 @@ class PadMapAccessibilityService : AccessibilityService() {
                     val oy = state.drag.centerY + state.filtY / fm * 16f
                     // Classic wrap: lift and re-plant along the look vector. During mux
                     // this stick is the only injected finger, so UP/DOWN is safe.
+                    PlaybackDebug.log(
+                        "look wrap pid=${state.pointerId} to ${ox.toInt()},${oy.toInt()} mux=$muxBoth"
+                    )
                     SidecarClient.pointerUpAsync(state.pointerId)
                     OverlayManager.instance?.noteInject(ox, oy)
                     SidecarClient.pointerDownAsync(state.pointerId, ox, oy)
