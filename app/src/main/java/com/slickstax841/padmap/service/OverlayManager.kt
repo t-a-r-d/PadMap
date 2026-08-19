@@ -1005,7 +1005,7 @@ class OverlayManager(private val context: Context) {
         adjustMode = true
         val root = configRoot ?: return
         root.background = GradientDrawable().apply {
-            setColor(Color.argb(70, 255, 140, 0))
+            setColor(Color.argb(40, 0, 160, 255))
         }
         // Switch window to explicit pixel positioning so it can be dragged/resized.
         // FLAG_LAYOUT_NO_LIMITS lets the user push the overlay past the screen edges
@@ -1030,25 +1030,94 @@ class OverlayManager(private val context: Context) {
         fun minW() = ((configPanel?.width  ?: 0) + dp(40)) * 2
         fun minH() = ((configPanel?.height ?: 0) + dp(40)) * 2
 
-        // Custom FrameLayout: background touches handle whole-window drag;
-        // edge handles and Save button consume their own touches first.
+        // 0 = move window, 1–4 = resize that edge. Decided on DOWN from local x/y
+        // so a press on the border never falls through to a whole-window drag.
+        var dragMode = 0
+        val band = dp(52)
         val layer = object : FrameLayout(context) {
+            init {
+                isClickable = true
+                isLongClickable = false
+            }
+
+            private fun hitClickableChild(x: Float, y: Float): Boolean {
+                for (i in childCount - 1 downTo 0) {
+                    val c = getChildAt(i)
+                    if (c.isClickable && x >= c.left && x < c.right && y >= c.top && y < c.bottom) return true
+                }
+                return false
+            }
+
+            private fun edgeAt(x: Float, y: Float): Int {
+                val b = band.toFloat()
+                val w = width.toFloat()
+                val h = height.toFloat()
+                return when {
+                    x <= b -> 3
+                    x >= w - b -> 4
+                    y <= b -> 1
+                    y >= h - b -> 2
+                    else -> 0
+                }
+            }
+
+            override fun onInterceptTouchEvent(e: MotionEvent): Boolean {
+                // Own the stream on DOWN so there is no press-and-hold before resize.
+                return e.actionMasked == MotionEvent.ACTION_DOWN && !hitClickableChild(e.x, e.y)
+            }
+
             override fun onTouchEvent(e: MotionEvent): Boolean {
-                when (e.action) {
+                when (e.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
-                        dragStartRawX = e.rawX; dragStartRawY = e.rawY
-                        winStartX = configParams.x; winStartY = configParams.y
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        dragMode = edgeAt(e.x, e.y)
+                        dragStartRawX = e.rawX
+                        dragStartRawY = e.rawY
+                        winStartX = configParams.x
+                        winStartY = configParams.y
+                        topRaw[0] = e.rawY
+                        topP[0] = configParams.y
+                        topP[1] = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
+                        botRaw[0] = e.rawY
+                        botP[0] = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
+                        lefRaw[0] = e.rawX
+                        lefP[0] = configParams.x
+                        lefP[1] = configParams.width.takeIf { it > 0 } ?: dm.widthPixels
+                        rigRaw[0] = e.rawX
+                        rigP[0] = configParams.width.takeIf { it > 0 } ?: dm.widthPixels
                         return true
                     }
                     MotionEvent.ACTION_MOVE -> {
-                        configParams.x = winStartX + (e.rawX - dragStartRawX).toInt()
-                        configParams.y = winStartY + (e.rawY - dragStartRawY).toInt()
+                        when (dragMode) {
+                            1 -> {
+                                val delta = (e.rawY - topRaw[0]).toInt()
+                                val newH = (topP[1] - delta).coerceAtLeast(minH())
+                                configParams.y = topP[0] + (topP[1] - newH)
+                                configParams.height = newH
+                            }
+                            2 -> {
+                                configParams.height = (botP[0] + (e.rawY - botRaw[0]).toInt()).coerceAtLeast(minH())
+                            }
+                            3 -> {
+                                val delta = (e.rawX - lefRaw[0]).toInt()
+                                val newW = (lefP[1] - delta).coerceAtLeast(minW())
+                                configParams.x = lefP[0] + (lefP[1] - newW)
+                                configParams.width = newW
+                            }
+                            4 -> {
+                                configParams.width = (rigP[0] + (e.rawX - rigRaw[0]).toInt()).coerceAtLeast(minW())
+                            }
+                            else -> {
+                                configParams.x = winStartX + (e.rawX - dragStartRawX).toInt()
+                                configParams.y = winStartY + (e.rawY - dragStartRawY).toInt()
+                            }
+                        }
                         runCatching { wm.updateViewLayout(configRoot, configParams) }
                         return true
                     }
-                    MotionEvent.ACTION_UP -> return true
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> return true
                 }
-                return false
+                return true
             }
         }
 
@@ -1095,101 +1164,20 @@ class OverlayManager(private val context: Context) {
             Gravity.CENTER_HORIZONTAL or Gravity.CENTER_VERTICAL
         ).apply { topMargin = dp(52) })
 
-        val band = dp(52)
-        fun edgeStrip(color: Int) = View(context).apply {
-            setBackgroundColor(color)
+        fun edgeStrip() = View(context).apply {
+            isClickable = false
+            setBackgroundColor(Color.argb(110, 255, 140, 0))
         }
-        val stripColor = Color.argb(40, 255, 140, 0)
-
-        val topStrip = edgeStrip(stripColor)
-        topStrip.setOnTouchListener { _, e ->
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    topRaw[0] = e.rawY
-                    topP[0] = configParams.y
-                    topP[1] = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val delta = (e.rawY - topRaw[0]).toInt()
-                    val newH = (topP[1] - delta).coerceAtLeast(minH())
-                    configParams.y = topP[0] + (topP[1] - newH)
-                    configParams.height = newH
-                    runCatching { wm.updateViewLayout(configRoot, configParams) }
-                    true
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
-                else -> false
-            }
-        }
-        layer.addView(topStrip, FrameLayout.LayoutParams(
+        layer.addView(edgeStrip(), FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, band, Gravity.TOP
         ))
-
-        val botStrip = edgeStrip(stripColor)
-        botStrip.setOnTouchListener { _, e ->
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    botRaw[0] = e.rawY
-                    botP[0] = configParams.height.takeIf { it > 0 } ?: dm.heightPixels
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    configParams.height = (botP[0] + (e.rawY - botRaw[0]).toInt()).coerceAtLeast(minH())
-                    runCatching { wm.updateViewLayout(configRoot, configParams) }
-                    true
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
-                else -> false
-            }
-        }
-        layer.addView(botStrip, FrameLayout.LayoutParams(
+        layer.addView(edgeStrip(), FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, band, Gravity.BOTTOM
         ))
-
-        val lefStrip = edgeStrip(stripColor)
-        lefStrip.setOnTouchListener { _, e ->
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    lefRaw[0] = e.rawX
-                    lefP[0] = configParams.x
-                    lefP[1] = configParams.width.takeIf { it > 0 } ?: dm.widthPixels
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val delta = (e.rawX - lefRaw[0]).toInt()
-                    val newW = (lefP[1] - delta).coerceAtLeast(minW())
-                    configParams.x = lefP[0] + (lefP[1] - newW)
-                    configParams.width = newW
-                    runCatching { wm.updateViewLayout(configRoot, configParams) }
-                    true
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
-                else -> false
-            }
-        }
-        layer.addView(lefStrip, FrameLayout.LayoutParams(
+        layer.addView(edgeStrip(), FrameLayout.LayoutParams(
             band, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.START
         ))
-
-        val rigStrip = edgeStrip(stripColor)
-        rigStrip.setOnTouchListener { _, e ->
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    rigRaw[0] = e.rawX
-                    rigP[0] = configParams.width.takeIf { it > 0 } ?: dm.widthPixels
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    configParams.width = (rigP[0] + (e.rawX - rigRaw[0]).toInt()).coerceAtLeast(minW())
-                    runCatching { wm.updateViewLayout(configRoot, configParams) }
-                    true
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
-                else -> false
-            }
-        }
-        layer.addView(rigStrip, FrameLayout.LayoutParams(
+        layer.addView(edgeStrip(), FrameLayout.LayoutParams(
             band, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.END
         ))
 

@@ -203,6 +203,27 @@ The overlay home card clips SAVE on the right edge. ADJUST, DEBUG, CLEAR, SAVE d
 
 ---
 
+## BUG-015 — Overlay adjust edges move the whole window; centre is orange
+
+**Status:** in progress
+**Reported:** 2026-08-19
+
+Dragging the highlighted adjust border moves the entire overlay instead of resizing. Edge drag feels like it needs a press-and-hold. The centre wash is orange; Damien wants a more transparent blue centre, orange only on the borders.
+
+### Cause
+
+`showAdjustLayer` uses leftover `onTouchEvent` on the full layer for window-move. Edge strips are not clickable and lose the gesture, so the parent treats the drag as a move. `enterAdjustMode` paints the whole root orange (`argb(70, 255, 140, 0)`).
+
+### Attempts
+
+- [in progress] Layer intercepts non-Save touches immediately (no slop). Hit-test the 52dp bands for resize vs centre for move. Root tint back to transparent blue; orange only on the edge strips and glow.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-014 — Zone options row is a vertical strip; active zone not highlighted
 
 **Status:** in progress
