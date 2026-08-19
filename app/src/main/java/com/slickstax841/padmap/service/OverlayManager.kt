@@ -250,9 +250,55 @@ class OverlayManager(private val context: Context) {
         }
     }
 
-    private val repinIcon = Runnable {
-        if (state == State.FLOATING && iconView?.visibility == View.VISIBLE) {
+    private var lastInjectMs = 0L
+    private var lastInjectX = 0f
+    private var lastInjectY = 0f
+    private val endInjectPass = Runnable {
+        if (PadMapAccessibilityService.instance?.isPlaybackBusy != true) {
+            setIconPassThrough(false)
+        }
+    }
+
+    fun noteInject(x: Float, y: Float) {
+        lastInjectMs = android.os.SystemClock.uptimeMillis()
+        lastInjectX = x
+        lastInjectY = y
+        setIconPassThrough(true)
+        handler.removeCallbacks(endInjectPass)
+        handler.postDelayed(endInjectPass, 160)
+    }
+
+    private fun isInjectTouch(rawX: Float, rawY: Float): Boolean {
+        if (android.os.SystemClock.uptimeMillis() - lastInjectMs > 200) return false
+        val dx = rawX - lastInjectX
+        val dy = rawY - lastInjectY
+        return dx * dx + dy * dy < 100f * 100f
+    }
+
+    private fun applyIconForGame(pkg: String) {
+        if (state != State.FLOATING || iconView?.visibility != View.VISIBLE) return
+        val layout = DataStore.data.value.gameLayouts.find { it.packageName == pkg && !it.archived }
+        if (layout?.iconX != null && layout.iconY != null) {
+            iconParams.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            iconParams.x = layout.iconX
+            iconParams.y = layout.iconY
+            iconView?.let { runCatching { wm.updateViewLayout(it, iconParams) } }
+        } else {
             pinIconTopCenter(apply = true)
+        }
+    }
+
+    private fun saveIconForCurrentGame() {
+        val pkg = PadMapAccessibilityService.instance?.lastGamePackage?.ifBlank {
+            PadMapAccessibilityService.instance?.foregroundPackage
+        } ?: return
+        if (pkg.isBlank()) return
+        DataStore.update { data ->
+            data.copy(gameLayouts = data.gameLayouts.map {
+                if (it.packageName == pkg && !it.archived)
+                    it.copy(iconX = iconParams.x, iconY = iconParams.y)
+                else it
+            })
         }
     }
 
@@ -283,10 +329,8 @@ class OverlayManager(private val context: Context) {
                 return@post
             }
             view.visibility = View.VISIBLE
-            pinIconTopCenter(apply = true)
-            handler.removeCallbacks(repinIcon)
-            handler.postDelayed(repinIcon, 400)
-            handler.postDelayed(repinIcon, 1200)
+            applyIconForGame(pkg)
+            handler.postDelayed({ applyIconForGame(pkg) }, 400)
         }
     }
 
@@ -359,20 +403,38 @@ class OverlayManager(private val context: Context) {
             alpha = 0.85f
         }
         var ix = 0; var iy = 0; var tx = 0f; var ty = 0f; var moved = false
+        var ignoreInject = false
         view.setOnTouchListener { _, e ->
             when (e.action) {
-                MotionEvent.ACTION_DOWN -> { ix = iconParams.x; iy = iconParams.y; tx = e.rawX; ty = e.rawY; moved = false; true }
+                MotionEvent.ACTION_DOWN -> {
+                    if (isInjectTouch(e.rawX, e.rawY)) {
+                        ignoreInject = true
+                        return@setOnTouchListener true
+                    }
+                    ignoreInject = false
+                    ix = iconParams.x; iy = iconParams.y; tx = e.rawX; ty = e.rawY; moved = false
+                    true
+                }
                 MotionEvent.ACTION_MOVE -> {
+                    if (ignoreInject) return@setOnTouchListener true
                     val dx = (e.rawX - tx).toInt(); val dy = (e.rawY - ty).toInt()
                     if (abs(dx) > 8 || abs(dy) > 8) { moved = true; view.alpha = 1f }
                     iconParams.x = ix + dx; iconParams.y = iy + dy
                     iconView?.let { runCatching { wm.updateViewLayout(it, iconParams) } }
                     true
                 }
-                MotionEvent.ACTION_UP -> {
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     view.alpha = 0.85f
-                    if (!moved && PadMapAccessibilityService.instance?.isPlaybackBusy != true)
+                    if (ignoreInject) {
+                        ignoreInject = false
+                        return@setOnTouchListener true
+                    }
+                    if (moved) saveIconForCurrentGame()
+                    else if (PadMapAccessibilityService.instance?.isPlaybackBusy != true &&
+                        !isInjectTouch(e.rawX, e.rawY)
+                    ) {
                         enterConfigModeFromIcon()
+                    }
                     true
                 }
                 else -> false
@@ -501,6 +563,7 @@ class OverlayManager(private val context: Context) {
         handler.post {
             removeConfig()
             iconView?.visibility = View.VISIBLE
+            if (gamePackage.isNotBlank()) applyIconForGame(gamePackage)
             PadMapAccessibilityService.instance?.restoreGamePackage(gamePackage)
             configGamePackage = ""
         }

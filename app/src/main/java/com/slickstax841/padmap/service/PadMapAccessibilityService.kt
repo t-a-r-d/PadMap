@@ -595,6 +595,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         syncIconPassThrough()
         entries.forEachIndexed { i, entry ->
             val (x, y) = tapXY(entry)
+            OverlayManager.instance?.noteInject(x, y)
             val ok = SidecarClient.pointerDown(pids[i], x, y)
             PlaybackDebug.log("down $label pid=${pids[i]} ${x.toInt()},${y.toInt()} ok=$ok ${SidecarClient.lastError}")
         }
@@ -637,6 +638,7 @@ class PadMapAccessibilityService : AccessibilityService() {
                             finish(up = false)
                             return@post
                         }
+                        OverlayManager.instance?.noteInject(x, y)
                         SidecarClient.pointerDown(pid, x, y)
                     }
                     delay(holdMs)
@@ -657,6 +659,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         activeSticks[label] = StickState(drag, drag.centerX, drag.centerY, drag.lookMode, pid)
         stickDeadTicks[label] = 0
         syncIconPassThrough()
+        OverlayManager.instance?.noteInject(drag.centerX, drag.centerY)
         val ok = SidecarClient.pointerDown(pid, drag.centerX, drag.centerY)
         PlaybackDebug.log("stick $label down pid=$pid ${drag.centerX.toInt()},${drag.centerY.toInt()} ok=$ok ${SidecarClient.lastError}")
         ensureStickLoop()
@@ -708,6 +711,7 @@ class PadMapAccessibilityService : AccessibilityService() {
                     SidecarClient.pointerUp(state.pointerId)
                     val ox = state.drag.centerX + state.filtX / fm * 16f
                     val oy = state.drag.centerY + state.filtY / fm * 16f
+                    OverlayManager.instance?.noteInject(ox, oy)
                     SidecarClient.pointerDown(state.pointerId, ox, oy)
                     nx = ox + state.filtX * step
                     ny = oy + state.filtY * step
@@ -733,6 +737,8 @@ class PadMapAccessibilityService : AccessibilityService() {
         }
         if (toRelease.isNotEmpty()) syncIconPassThrough()
         if (updates.isNotEmpty()) {
+            val first = updates.values.first()
+            OverlayManager.instance?.noteInject(first.first, first.second)
             SidecarClient.batchUpdateAsync(updates)
         }
     }

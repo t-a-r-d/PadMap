@@ -29,7 +29,9 @@ data class GameLayout(
     val mappings: List<MappingEntry> = emptyList(),
     val layerBinds: List<LayerBind> = emptyList(),
     // Uninstalled games stay here so zones come back if the user reinstalls.
-    val archived: Boolean = false
+    val archived: Boolean = false,
+    val iconX: Int? = null,
+    val iconY: Int? = null
 )
 
 @Serializable
