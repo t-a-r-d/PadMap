@@ -79,6 +79,15 @@ data class AppData(
     val overlayY: Int? = null,
     val overlayW: Int? = null,
     val overlayH: Int? = null,
+    val overlayMode: String = "auto",
+    val landX: Int? = null,
+    val landY: Int? = null,
+    val landW: Int? = null,
+    val landH: Int? = null,
+    val portX: Int? = null,
+    val portY: Int? = null,
+    val portW: Int? = null,
+    val portH: Int? = null,
     val buttonZoneRadius: Float = 32f
 )
 

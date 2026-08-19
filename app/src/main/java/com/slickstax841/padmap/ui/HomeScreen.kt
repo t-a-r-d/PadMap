@@ -50,6 +50,8 @@ import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.data.GameLayout
 import com.slickstax841.padmap.data.GameScanner
 import com.slickstax841.padmap.data.resolvedBinds
+import com.slickstax841.padmap.data.resolvedOverlay
+import com.slickstax841.padmap.data.ScreenSize
 import com.slickstax841.padmap.data.withBind
 import com.slickstax841.padmap.ControllerEventBus
 import com.slickstax841.padmap.inject.SidecarClient
@@ -319,6 +321,13 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
 
             item {
                 Spacer(Modifier.height(4.dp))
+                SectionLabel("OVERLAY")
+                Spacer(Modifier.height(6.dp))
+                OverlayFitBlock()
+            }
+
+            item {
+                Spacer(Modifier.height(4.dp))
                 SectionLabel("LAYERS")
                 Spacer(Modifier.height(6.dp))
                 LayersBlock()
@@ -430,6 +439,53 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
 
             item { Spacer(Modifier.height(40.dp)) }
         }
+    }
+}
+
+@Composable
+private fun OverlayFitBlock() {
+    val ctx = LocalContext.current
+    val skin = LocalAppSkin.current
+    val appData by DataStore.data.collectAsState()
+    val mode = appData.overlayMode
+    val rect = appData.resolvedOverlay(ctx)
+    val sizeText = if (mode == "auto") {
+        val (w, h) = ScreenSize.current(ctx)
+        "Auto  $w \u00d7 $h"
+    } else {
+        "${rect.w} \u00d7 ${rect.h}"
+    }
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(skin.surfaceCol)) {
+        Row(Modifier.fillMaxWidth()) {
+            listOf("auto" to "AUTO", "landscape" to "LANDSCAPE", "portrait" to "PORTRAIT").forEach { (id, label) ->
+                val on = mode == id
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clickable {
+                            DataStore.update { it.copy(overlayMode = id) }
+                            OverlayManager.instance?.applyStoredOverlayFit()
+                        }
+                        .background(if (on) skin.accent else Color.Transparent)
+                        .border(1.dp, skin.accent)
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        label,
+                        color = if (on) Color.Black else skin.accent,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+        Text(
+            sizeText,
+            color = skin.textSecondary,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(10.dp)
+        )
     }
 }
 

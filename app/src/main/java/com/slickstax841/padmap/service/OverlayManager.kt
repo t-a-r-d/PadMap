@@ -17,7 +17,10 @@ import com.slickstax841.padmap.data.ButtonTuningStore
 import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.data.GameLayout
 import com.slickstax841.padmap.data.MappingEntry
+import com.slickstax841.padmap.data.AppData
+import com.slickstax841.padmap.data.ScreenSize
 import com.slickstax841.padmap.data.TouchAction
+import com.slickstax841.padmap.data.resolvedOverlay
 import java.util.UUID
 import kotlin.math.*
 
@@ -176,6 +179,47 @@ class OverlayManager(private val context: Context) {
 
     fun resetIconToTopCenter() {
         handler.post { pinIconTopCenter(apply = true) }
+    }
+
+    fun applyStoredOverlayFit() {
+        handler.post {
+            applyOverlayFit(configParams)
+            configRoot?.let { runCatching { wm.updateViewLayout(it, configParams) } }
+        }
+    }
+
+    private fun applyOverlayFit(lp: WindowManager.LayoutParams, forcePixels: Boolean = false) {
+        val data = DataStore.data.value
+        val auto = data.overlayMode == "auto"
+        if (auto && !forcePixels) {
+            lp.gravity = 0
+            lp.flags = 0
+            lp.width = WindowManager.LayoutParams.MATCH_PARENT
+            lp.height = WindowManager.LayoutParams.MATCH_PARENT
+            lp.x = 0
+            lp.y = 0
+            return
+        }
+        val r = data.resolvedOverlay(context)
+        lp.gravity = Gravity.TOP or Gravity.START
+        lp.flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        lp.width = r.w
+        lp.height = r.h
+        lp.x = r.x
+        lp.y = r.y
+    }
+
+    private fun saveOverlayRect(data: AppData, x: Int, y: Int, w: Int, h: Int): AppData {
+        val land = data.overlayMode == "landscape" ||
+            (data.overlayMode == "auto" && ScreenSize.isLandscape(context))
+        return if (land) data.copy(
+            overlayX = x, overlayY = y, overlayW = w, overlayH = h,
+            landX = x, landY = y, landW = w, landH = h
+        ) else data.copy(
+            overlayX = x, overlayY = y, overlayW = w, overlayH = h,
+            portX = x, portY = y, portW = w, portH = h
+        )
     }
 
     // Injected touches hit this window if it is touchable and overlaps a zone (BUG-009).
@@ -590,25 +634,7 @@ class OverlayManager(private val context: Context) {
         keyCatcher = catcher
         root.addView(catcher, FrameLayout.LayoutParams(1, 1))
 
-        // Apply saved overlay position/size if the user has previously adjusted it.
-        // Reset to defaults first so a fresh session doesn't inherit stale values.
-        val savedOverlay = DataStore.data.value
-        if (savedOverlay.overlayX != null) {
-            configParams.gravity = Gravity.TOP or Gravity.START
-            configParams.flags   = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                                   WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-            configParams.width   = savedOverlay.overlayW ?: dm.widthPixels
-            configParams.height  = savedOverlay.overlayH ?: dm.heightPixels
-            configParams.x       = savedOverlay.overlayX
-            configParams.y       = savedOverlay.overlayY ?: 0
-        } else {
-            configParams.gravity = 0
-            configParams.flags   = 0
-            configParams.width   = WindowManager.LayoutParams.MATCH_PARENT
-            configParams.height  = WindowManager.LayoutParams.MATCH_PARENT
-            configParams.x       = 0
-            configParams.y       = 0
-        }
+        applyOverlayFit(configParams)
 
         configRoot = root
         try {
@@ -909,14 +935,7 @@ class OverlayManager(private val context: Context) {
         // Switch window to explicit pixel positioning so it can be dragged/resized.
         // FLAG_LAYOUT_NO_LIMITS lets the user push the overlay past the screen edges
         // if the device clips zones that should be reachable.
-        val saved = DataStore.data.value
-        configParams.gravity = Gravity.TOP or Gravity.START
-        configParams.flags   = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                               WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        configParams.width   = saved.overlayW ?: dm.widthPixels
-        configParams.height  = saved.overlayH ?: dm.heightPixels
-        configParams.x       = saved.overlayX ?: 0
-        configParams.y       = saved.overlayY ?: 0
+        applyOverlayFit(configParams, forcePixels = true)
         runCatching { wm.updateViewLayout(root, configParams) }
         configPanel?.visibility = View.GONE
         showAdjustLayer(root)
@@ -1157,12 +1176,7 @@ class OverlayManager(private val context: Context) {
         adjustMode = false
         val root = configRoot ?: return
         // Save the current window position and size
-        DataStore.update { it.copy(
-            overlayX = configParams.x,
-            overlayY = configParams.y,
-            overlayW = configParams.width,
-            overlayH = configParams.height
-        )}
+        DataStore.update { saveOverlayRect(it, configParams.x, configParams.y, configParams.width, configParams.height) }
         // Remove the adjust layer
         adjustLayer?.let { root.removeView(it) }
         adjustLayer = null
