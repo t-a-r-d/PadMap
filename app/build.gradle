@@ -12,8 +12,8 @@ android {
         applicationId "com.slickstax841.padmap"
         minSdk 26
         targetSdk 34
-        versionCode 71
-        versionName "71.0"
+        versionCode 72
+        versionName "72.0"
     }
 
     buildTypes {
