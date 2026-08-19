@@ -16,7 +16,6 @@ import android.view.MotionEvent
 import android.view.accessibility.AccessibilityEvent
 import androidx.annotation.RequiresApi
 import com.slickstax841.padmap.ControllerEventBus
-import com.slickstax841.padmap.data.ButtonMode
 import com.slickstax841.padmap.data.ButtonTuningStore
 import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.data.GameLayout
@@ -72,7 +71,6 @@ class PadMapAccessibilityService : AccessibilityService() {
     private val activeSticks = mutableMapOf<String, StickState>()
     private val activeHolds = mutableMapOf<String, HoldState>()
     private val turboJobs = mutableMapOf<String, Job>()
-    private val tapRepeatJobs = mutableMapOf<String, Job>()
     private val axisValues = mutableMapOf<String, Pair<Float, Float>>()
     private val hatState = mutableMapOf<String, Boolean>()
     private val stickDeadTicks = mutableMapOf<String, Int>()
@@ -83,7 +81,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     val activeStickCount: Int get() = activeSticks.size
     val isPlaybackBusy: Boolean
         get() = activeHolds.isNotEmpty() || activeSticks.isNotEmpty() ||
-            inFlightTaps > 0 || turboJobs.isNotEmpty() || tapRepeatJobs.isNotEmpty()
+            inFlightTaps > 0 || turboJobs.isNotEmpty()
 
     private var stickLoopRunning = false
     private var lastSidecarWarnMs = 0L
@@ -218,8 +216,6 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     fun releaseAllPlayback() {
-        tapRepeatJobs.values.forEach { it.cancel() }
-        tapRepeatJobs.clear()
         turboJobs.values.forEach { it.cancel() }
         turboJobs.clear()
         activeHolds.keys.toList().forEach { releaseHold(it) }
@@ -546,40 +542,23 @@ class PadMapAccessibilityService : AccessibilityService() {
         PlaybackDebug.log("btn down $label")
         val nonTurbo = entries.filter { !it.turbo }
         val turboEntries = entries.filter { it.turbo }
-        val mode = nonTurbo.firstOrNull()?.let { ButtonTuningStore.get(it.zoneId).mode } ?: ButtonMode.HOLD
         if (nonTurbo.isNotEmpty()) {
-            when (mode) {
-                ButtonMode.HOLD -> {
-                    if (activeHolds.containsKey(label)) {
-                        PlaybackDebug.log("btn $label re-down")
-                        releaseHold(label)
-                    }
-                    startHold(label, nonTurbo)
-                }
-                ButtonMode.TAP -> fireTaps(nonTurbo)
-                ButtonMode.REPEAT -> {
-                    if (tapRepeatJobs.containsKey(label)) return
-                    tapRepeatJobs[label] = scope.launch {
-                        while (isActive) {
-                            val captured = nonTurbo.toList()
-                            val interval = captured.firstOrNull()
-                                ?.let { ButtonTuningStore.get(it.zoneId).repeatIntervalMs }
-                                ?: TURBO_INTERVAL_MS
-                            mainHandler.post { fireTaps(captured) }
-                            delay(interval)
-                        }
-                    }
-                    syncIconPassThrough()
-                }
+            if (activeHolds.containsKey(label)) {
+                PlaybackDebug.log("btn $label re-down")
+                releaseHold(label)
             }
+            startHold(label, nonTurbo)
         }
         if (turboEntries.isNotEmpty()) {
             turboJobs[label]?.cancel()
             turboJobs[label] = scope.launch {
                 while (isActive) {
                     val captured = turboEntries.toList()
+                    val interval = captured.firstOrNull()
+                        ?.let { ButtonTuningStore.get(it.zoneId).repeatIntervalMs }
+                        ?: TURBO_INTERVAL_MS
                     mainHandler.post { fireTaps(captured) }
-                    delay(TURBO_INTERVAL_MS)
+                    delay(interval.coerceAtLeast(40L))
                 }
             }
             syncIconPassThrough()
@@ -588,17 +567,7 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     private fun onButtonUp(label: String) {
         PlaybackDebug.log("btn up $label")
-        val layout = DataStore.activeLayout ?: return
-        val mode = layerMappings(layout).filter { it.inputName == label && !it.turbo }
-            .firstOrNull()?.let { ButtonTuningStore.get(it.zoneId).mode } ?: ButtonMode.HOLD
-        when (mode) {
-            ButtonMode.HOLD -> releaseHold(label)
-            ButtonMode.TAP -> {}
-            ButtonMode.REPEAT -> {
-                tapRepeatJobs[label]?.cancel()
-                tapRepeatJobs.remove(label)
-            }
-        }
+        releaseHold(label)
         turboJobs[label]?.cancel()
         turboJobs.remove(label)
         syncIconPassThrough()

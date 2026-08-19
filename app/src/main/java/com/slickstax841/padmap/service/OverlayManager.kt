@@ -15,7 +15,6 @@ import android.provider.Settings
 import android.view.*
 import android.widget.*
 import com.slickstax841.padmap.R
-import com.slickstax841.padmap.data.ButtonMode
 import com.slickstax841.padmap.data.ButtonTuningStore
 import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.data.GameLayout
@@ -77,6 +76,9 @@ class OverlayManager(private val context: Context) {
     private var isTuningStick = false
     private var tuningBoxView: View? = null
     private var tuningRepeatRunnable: Runnable? = null
+    private var panelLeftBeforeTune = 0
+    private var panelTopBeforeTune = 0
+    private var panelHiddenForTune = false
 
     private val wm = context.getSystemService(WindowManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
@@ -1194,14 +1196,7 @@ class OverlayManager(private val context: Context) {
             rebuildZoneLayer()
         })
 
-        // TURBO — button zones only, must be assigned
         if (!zone.isStick && zone.inputName.isNotBlank()) {
-            val turboColor = if (zone.turbo) Color.parseColor("#FFB300") else Color.parseColor("#555555")
-            buttons.add(BtnSpec("\u26A1", turboColor) {
-                zone.turbo = !zone.turbo
-                dismissContextMenu()
-                rebuildZoneLayer()
-            })
             buttons.add(BtnSpec("\u2398", Color.parseColor("#336699")) {
                 val copy = zone.copy(
                     id = UUID.randomUUID().toString(),
@@ -1344,6 +1339,7 @@ class OverlayManager(private val context: Context) {
     private fun dismissTuningBox() {
         tuningBoxView?.let { zoneLayer?.removeView(it) }
         tuningBoxView = null
+        restoreHomeAfterTune()
     }
 
     private fun showPlayCatcher() {
@@ -1700,8 +1696,31 @@ class OverlayManager(private val context: Context) {
 
     // ─── Button tuning box ────────────────────────────────────────────────────
 
+    private fun hideHomeForTune() {
+        val panel = configPanel ?: return
+        val lp = panel.layoutParams as? FrameLayout.LayoutParams ?: return
+        panelLeftBeforeTune = lp.leftMargin
+        panelTopBeforeTune = lp.topMargin
+        panelHiddenForTune = true
+        contextMenuViews.forEach { zoneLayer?.removeView(it) }
+        contextMenuViews.clear()
+        panel.visibility = View.GONE
+    }
+
+    private fun restoreHomeAfterTune() {
+        if (!panelHiddenForTune) return
+        panelHiddenForTune = false
+        val panel = configPanel ?: return
+        val lp = panel.layoutParams as? FrameLayout.LayoutParams ?: return
+        lp.leftMargin = panelLeftBeforeTune
+        lp.topMargin = panelTopBeforeTune
+        panel.layoutParams = lp
+        panel.visibility = View.VISIBLE
+    }
+
     private fun showTuningBox(zoneId: String, label: String, zoneCx: Float, zoneCy: Float) {
         dismissTuningBox()
+        hideHomeForTune()
         tuneZoneId = zoneId
         tuneDisplayLabel = label
         isTuningStick = false
@@ -1778,37 +1797,36 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun buildTuningContent(): View {
-        val tuning = ButtonTuningStore.get(tuneZoneId)
+        val zone = editingZones.find { it.id == tuneZoneId }
         val container = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
 
-        // Mode row
-        val modeRow = LinearLayout(context).apply {
+        val turboRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(6) }
+            ).apply { bottomMargin = dp(8) }
         }
-        modeRow.addView(TextView(context).apply {
-            text = "MODE"
-            textSize = 10f
+        turboRow.addView(TextView(context).apply {
+            text = "TURBO"
+            textSize = 13f
             setTextColor(Color.parseColor("#AAAAAA"))
-            layoutParams = LinearLayout.LayoutParams(dp(56), LinearLayout.LayoutParams.WRAP_CONTENT)
+            layoutParams = LinearLayout.LayoutParams(dp(80), LinearLayout.LayoutParams.WRAP_CONTENT)
         })
-        ButtonMode.values().forEach { mode ->
-            val active = tuning.mode == mode
-            modeRow.addView(TextView(context).apply {
-                text = mode.label
+        listOf("OFF", "ON").forEach { option ->
+            val on = (option == "ON") == (zone?.turbo == true)
+            turboRow.addView(TextView(context).apply {
+                text = option
                 textSize = 13f
                 setPadding(dp(12), dp(8), dp(12), dp(8))
-                setTextColor(if (active) Color.BLACK else Color.parseColor("#00BFFF"))
-                background = if (active) GradientDrawable().apply {
-                    setColor(Color.parseColor("#00BFFF"))
+                setTextColor(if (on) Color.BLACK else Color.parseColor("#FFB300"))
+                background = if (on) GradientDrawable().apply {
+                    setColor(Color.parseColor("#FFB300"))
                     cornerRadius = dp(4).toFloat()
                 } else GradientDrawable().apply {
                     setColor(Color.TRANSPARENT)
-                    setStroke(dp(1), Color.parseColor("#00BFFF"))
+                    setStroke(dp(1), Color.parseColor("#FFB300"))
                     cornerRadius = dp(4).toFloat()
                 }
                 layoutParams = LinearLayout.LayoutParams(
@@ -1816,38 +1834,37 @@ class OverlayManager(private val context: Context) {
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { marginEnd = dp(4) }
                 setOnClickListener {
-                    ButtonTuningStore.get(tuneZoneId).mode = mode
+                    zone?.turbo = option == "ON"
+                    zoneViews[tuneZoneId]?.invalidate()
                     refreshTuningContent()
                 }
             })
         }
-        container.addView(modeRow)
+        container.addView(turboRow)
 
-        container.addView(stepperRow(
-            label = "DURATION",
-            getValue = { fmtMs(ButtonTuningStore.get(tuneZoneId).tapDurationMs) },
-            minus = { amount ->
-                ButtonTuningStore.get(tuneZoneId).tapDurationMs =
-                    (ButtonTuningStore.get(tuneZoneId).tapDurationMs - 10L * amount).coerceAtLeast(0L)
-            },
-            plus = { amount ->
-                ButtonTuningStore.get(tuneZoneId).tapDurationMs =
-                    (ButtonTuningStore.get(tuneZoneId).tapDurationMs + 10L * amount).coerceAtMost(100_000L)
-            }
-        ))
-
-        // Interval (REPEAT only)
-        if (tuning.mode == ButtonMode.REPEAT) {
+        if (zone?.turbo == true) {
+            container.addView(stepperRow(
+                label = "DURATION",
+                getValue = { fmtMs(ButtonTuningStore.get(tuneZoneId).tapDurationMs) },
+                minus = { amount ->
+                    ButtonTuningStore.get(tuneZoneId).tapDurationMs =
+                        (ButtonTuningStore.get(tuneZoneId).tapDurationMs - 10L * amount).coerceAtLeast(16L)
+                },
+                plus = { amount ->
+                    ButtonTuningStore.get(tuneZoneId).tapDurationMs =
+                        (ButtonTuningStore.get(tuneZoneId).tapDurationMs + 10L * amount).coerceAtMost(500L)
+                }
+            ))
             container.addView(stepperRow(
                 label = "INTERVAL",
                 getValue = { fmtMs(ButtonTuningStore.get(tuneZoneId).repeatIntervalMs) },
                 minus = { amount ->
                     ButtonTuningStore.get(tuneZoneId).repeatIntervalMs =
-                        (ButtonTuningStore.get(tuneZoneId).repeatIntervalMs - 25L * amount).coerceAtLeast(0L)
+                        (ButtonTuningStore.get(tuneZoneId).repeatIntervalMs - 25L * amount).coerceAtLeast(40L)
                 },
                 plus = { amount ->
                     ButtonTuningStore.get(tuneZoneId).repeatIntervalMs =
-                        (ButtonTuningStore.get(tuneZoneId).repeatIntervalMs + 25L * amount).coerceAtMost(100_000L)
+                        (ButtonTuningStore.get(tuneZoneId).repeatIntervalMs + 25L * amount).coerceAtMost(1000L)
                 }
             ))
         }
@@ -1869,6 +1886,8 @@ class OverlayManager(private val context: Context) {
             background = outlineDrawable(Color.parseColor("#CC3333"))
             setOnClickListener {
                 ButtonTuningStore.reset(tuneZoneId)
+                editingZones.find { it.id == tuneZoneId }?.turbo = false
+                zoneViews[tuneZoneId]?.invalidate()
                 refreshTuningContent()
             }
         })
@@ -1970,6 +1989,7 @@ class OverlayManager(private val context: Context) {
 
     private fun showStickTuningBox(zoneId: String, label: String, zoneCx: Float, zoneCy: Float) {
         dismissTuningBox()
+        hideHomeForTune()
         stickTuneZoneId = zoneId
         stickTuneDisplayLabel = label
         isTuningStick = true
