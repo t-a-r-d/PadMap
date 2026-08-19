@@ -726,7 +726,7 @@ class PadMapAccessibilityService : AccessibilityService() {
                 val dt = if (state.lastTickMs == 0L) 0.016f
                     else ((now - state.lastTickMs).coerceIn(4L, 32L)) / 1000f
                 state.lastTickMs = now
-                val step = tuning.lookSpeed * 140f * scale * dt
+                val step = 700f * scale * dt
                 var nx = state.currentX + state.filtX * step
                 var ny = state.currentY + state.filtY * step
                 val dm = resources.displayMetrics

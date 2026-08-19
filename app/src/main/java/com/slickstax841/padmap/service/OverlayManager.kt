@@ -1,9 +1,12 @@
 package com.slickstax841.padmap.service
 
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.*
 import android.graphics.drawable.GradientDrawable
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.animation.LinearInterpolator
 import android.content.Intent
 import android.os.Build
 import android.os.Handler
@@ -769,6 +772,7 @@ class OverlayManager(private val context: Context) {
             background = outlineDrawable(Color.parseColor("#00BFFF"))
             setOnClickListener { toggleDebugBox() }
         })
+        btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(dp(16), 1) })
         btnRow.addView(Space(context).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
         // CLEAR
         btnRow.addView(TextView(context).apply {
@@ -937,10 +941,8 @@ class OverlayManager(private val context: Context) {
         if (adjustMode) return
         adjustMode = true
         val root = configRoot ?: return
-        // Amber tint with blue border — user can see the overlay edges before tapping DONE
         root.background = GradientDrawable().apply {
-            setColor(Color.argb(120, 255, 140, 0))
-            setStroke(dp(2), Color.parseColor("#0080FF"))
+            setColor(Color.argb(70, 255, 140, 0))
         }
         // Switch window to explicit pixel positioning so it can be dragged/resized.
         // FLAG_LAYOUT_NO_LIMITS lets the user push the overlay past the screen edges
@@ -987,6 +989,14 @@ class OverlayManager(private val context: Context) {
             }
         }
 
+        val glow = OverlayGlowView(context)
+        glow.isClickable = false
+        glow.isFocusable = false
+        layer.addView(glow, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
         // Instruction label — centred, slightly above the Save button
         layer.addView(TextView(context).apply {
             text = "DRAG MIDDLE TO MOVE \u2022 DRAG ANY EDGE TO RESIZE"
@@ -1026,7 +1036,7 @@ class OverlayManager(private val context: Context) {
         fun edgeStrip(color: Int) = View(context).apply {
             setBackgroundColor(color)
         }
-        val stripColor = Color.argb(90, 0, 191, 255)
+        val stripColor = Color.argb(40, 255, 140, 0)
 
         val topStrip = edgeStrip(stripColor)
         topStrip.setOnTouchListener { _, e ->
@@ -2023,22 +2033,6 @@ class OverlayManager(private val context: Context) {
         val tuning = ButtonTuningStore.getStick(stickTuneZoneId)
         val container = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
 
-        val lookZone = editingZones.find { it.id == stickTuneZoneId }?.lookMode == true
-        if (lookZone) {
-            container.addView(stepperRow(
-                label = "PAN SPD",
-                getValue = { "${ButtonTuningStore.getStick(stickTuneZoneId).lookSpeed.toInt()}" },
-                minus = { amount ->
-                    ButtonTuningStore.getStick(stickTuneZoneId).lookSpeed =
-                        (ButtonTuningStore.getStick(stickTuneZoneId).lookSpeed - amount).coerceAtLeast(1f)
-                },
-                plus = { amount ->
-                    ButtonTuningStore.getStick(stickTuneZoneId).lookSpeed =
-                        (ButtonTuningStore.getStick(stickTuneZoneId).lookSpeed + amount).coerceAtMost(20f)
-                }
-            ))
-        }
-
         container.addView(stepperRow(
             label = "SENS",
             getValue = { "${(ButtonTuningStore.getStick(stickTuneZoneId).sensitivityPct * 100).toInt()}%" },
@@ -2330,4 +2324,84 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun dp(v: Int) = (v * dm.density).toInt()
+}
+
+/** M3DIA-style rotating/pulsing orange sweep on the overlay resize rim. */
+private class OverlayGlowView(context: Context) : View(context) {
+    private val accent = Color.parseColor("#FF8C00")
+    private val stroke = 6f
+    private val pad = stroke * 1.15f
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.BUTT
+        strokeJoin = Paint.Join.MITER
+        strokeWidth = stroke
+    }
+    private val spin = ValueAnimator.ofFloat(0f, 1f).apply {
+        duration = 3600
+        interpolator = LinearInterpolator()
+        repeatCount = ValueAnimator.INFINITE
+        addUpdateListener { invalidate() }
+    }
+    private val pulse = ValueAnimator.ofFloat(0.78f, 1f).apply {
+        duration = 1700
+        interpolator = AccelerateDecelerateInterpolator()
+        repeatCount = ValueAnimator.INFINITE
+        repeatMode = ValueAnimator.REVERSE
+        addUpdateListener { invalidate() }
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        spin.start()
+        pulse.start()
+    }
+
+    override fun onDetachedFromWindow() {
+        spin.cancel()
+        pulse.cancel()
+        super.onDetachedFromWindow()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val progress = spin.animatedValue as? Float ?: 0f
+        val p = pulse.animatedValue as? Float ?: 1f
+        if (width <= pad * 2 + stroke || height <= pad * 2 + stroke) return
+        val frame = RectF(pad, pad, width - pad, height - pad)
+        val mid = blend(accent, 0.22f)
+        val hot = blend(accent, 0.78f)
+        val colors = intArrayOf(
+            accent, mid, hot, Color.WHITE, hot, mid, accent,
+            mid, hot, Color.WHITE, hot, mid, accent
+        )
+        val stops = floatArrayOf(
+            0f, 0.16f, 0.21f, 0.24f, 0.27f, 0.32f, 0.42f,
+            0.66f, 0.71f, 0.74f, 0.77f, 0.82f, 1f
+        )
+        val shader = SweepGradient(width / 2f, height / 2f, colors, stops)
+        shader.setLocalMatrix(Matrix().apply { setRotate(progress * 360f, width / 2f, height / 2f) })
+        paint.shader = shader
+        paint.strokeWidth = stroke * 1.7f
+        paint.alpha = (70 * p).toInt().coerceIn(0, 255)
+        canvas.drawRect(frame, paint)
+        paint.strokeWidth = stroke * 1.25f
+        paint.alpha = (165 * p).toInt().coerceIn(0, 255)
+        canvas.drawRect(frame, paint)
+        paint.strokeWidth = stroke * 1.05f
+        paint.alpha = 255
+        canvas.drawRect(frame, paint)
+        paint.strokeWidth = stroke * 0.7f
+        canvas.drawRect(frame, paint)
+        paint.shader = null
+        paint.alpha = 255
+    }
+
+    private fun blend(color: Int, amount: Float): Int {
+        val t = amount.coerceIn(0f, 1f)
+        return Color.rgb(
+            (Color.red(color) + (255 - Color.red(color)) * t).toInt(),
+            (Color.green(color) + (255 - Color.green(color)) * t).toInt(),
+            (Color.blue(color) + (255 - Color.blue(color)) * t).toInt()
+        )
+    }
 }
