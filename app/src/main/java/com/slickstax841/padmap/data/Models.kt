@@ -75,6 +75,9 @@ data class AppData(
     // null = not yet moved by user; panel defaults to screen centre on first open.
     val panelX: Int? = null,
     val panelY: Int? = null,
+    // Saved position of the zone-options cluster. null = overlay centre.
+    val optionsX: Int? = null,
+    val optionsY: Int? = null,
     // Saved overlay window position and size from the overlay adjust tool.
     // null = not yet adjusted; overlay defaults to MATCH_PARENT.
     val overlayX: Int? = null,

@@ -203,6 +203,27 @@ The overlay home card clips SAVE on the right edge. ADJUST, DEBUG, CLEAR, SAVE d
 
 ---
 
+## BUG-014 — Zone options row is a vertical strip; active zone not highlighted
+
+**Status:** in progress
+**Reported:** 2026-08-19 on PadMap v71
+
+With a zone open, the options sit in a vertical row beside the home card (or around the zone). Damien wants a round cluster in the screen centre, a move handle that repositions the cluster and keeps that place, and the active zone highlighted with the orange glow plus a clearer colour.
+
+### Cause
+
+`showContextMenu` docks DELETE / COPY / size / TUNE / MOVE as a vertical list next to `configPanel`. MOVE drags the zone, not the menu. `ZoneCircleView` always paints cyan; glow exists only on the overlay resize rim.
+
+### Attempts
+
+- [in progress] Round cluster on `configRoot`: options on a ring, MOVE in the centre drags the cluster, `optionsX`/`optionsY` persist. Active zone uses orange fill/stroke and the same sweep glow on its border.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-011 — Look-stick pan is jittery; SPD shown as px; no invert-Y
 
 **Status:** in progress

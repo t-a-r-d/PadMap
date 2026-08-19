@@ -1241,8 +1241,6 @@ class OverlayManager(private val context: Context) {
         // Make this zone live for reassignment — pressing any button/stick while the
         // context menu is open will reassign the zone to the new input.
         pendingZoneId = zone.id
-        val screenW = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels).toFloat()
-        val screenH = (configRoot?.height?.takeIf { it > 0 } ?: dm.heightPixels).toFloat()
 
         // null onClick = drag handle (gets a touch listener instead of click listener)
         data class BtnSpec(val icon: String, val bgColor: Int, val onClick: (() -> Unit)?)
@@ -1303,80 +1301,89 @@ class OverlayManager(private val context: Context) {
             })
         }
 
-        // MOVE — always last; drag handle, no click action
-        buttons.add(BtnSpec("\u271B", Color.parseColor("#336699"), null))
-
         val btnSize = dp(40)
-        val createdViews = mutableListOf<View>()
+        val gap = dp(12)
+        val pad = dp(14)
+        val orbit = btnSize + gap
+        val clusterSize = (orbit + btnSize / 2 + pad) * 2
 
-        buttons.forEach { spec ->
-            val btn = TextView(context).apply {
-                text = spec.icon
-                textSize = 16f
-                setTextColor(Color.WHITE)
-                gravity = Gravity.CENTER
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(spec.bgColor)
-                }
-                elevation = 14f
-                if (spec.onClick != null) setOnClickListener { spec.onClick.invoke() }
+        fun optionBtn(spec: BtnSpec) = TextView(context).apply {
+            text = spec.icon
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(spec.bgColor)
             }
-            zoneLayer?.addView(btn, FrameLayout.LayoutParams(btnSize, btnSize))
-            contextMenuViews.add(btn)
-            createdViews.add(btn)
+            elevation = 14f
+            if (spec.onClick != null) setOnClickListener { spec.onClick.invoke() }
         }
 
-        val dockToPanel = {
-            val panel = configPanel
-            val pLp = panel?.layoutParams as? FrameLayout.LayoutParams
-            val pw = panel?.width?.takeIf { it > 0 } ?: dp(200)
-            val px = pLp?.leftMargin ?: 0
-            val py = pLp?.topMargin ?: 0
-            val overlayW = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels)
-            val gap = dp(8)
-            val rightX = px + pw + gap
-            val leftX = px - btnSize - gap
-            val x = if (rightX + btnSize <= overlayW) rightX else leftX.coerceAtLeast(0)
-            createdViews.forEachIndexed { i, btn ->
-                val lp = btn.layoutParams as? FrameLayout.LayoutParams ?: return@forEachIndexed
-                lp.leftMargin = x
-                lp.topMargin = py + i * (btnSize + gap)
-                btn.layoutParams = lp
+        val cluster = FrameLayout(context).apply {
+            isClickable = true
+            elevation = 16f
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.argb(200, 0, 0, 0))
+                setStroke(dp(2), Color.parseColor("#FF8C00"))
             }
         }
-        if (configPanel?.width == 0) configPanel?.post { dockToPanel() } else dockToPanel()
 
-        // Drag handle — last button in the list
-        val dragHandle = createdViews.last()
+        val mid = (clusterSize - btnSize) / 2
+        val moveBtn = optionBtn(BtnSpec("\u271B", Color.parseColor("#336699"), null))
+        cluster.addView(moveBtn, FrameLayout.LayoutParams(btnSize, btnSize).apply {
+            leftMargin = mid
+            topMargin = mid
+        })
+        buttons.forEachIndexed { i, spec ->
+            val angle = -Math.PI / 2.0 + 2.0 * Math.PI * i / buttons.size
+            val cx = clusterSize / 2f + cos(angle).toFloat() * orbit - btnSize / 2f
+            val cy = clusterSize / 2f + sin(angle).toFloat() * orbit - btnSize / 2f
+            cluster.addView(optionBtn(spec), FrameLayout.LayoutParams(btnSize, btnSize).apply {
+                leftMargin = cx.toInt()
+                topMargin = cy.toInt()
+            })
+        }
+
+        val overlayW = (configRoot?.width?.takeIf { it > 0 } ?: dm.widthPixels)
+        val overlayH = (configRoot?.height?.takeIf { it > 0 } ?: dm.heightPixels)
+        val maxX = (overlayW - clusterSize).coerceAtLeast(0)
+        val maxY = (overlayH - clusterSize).coerceAtLeast(0)
+        val saved = DataStore.data.value
+        val clusterLp = FrameLayout.LayoutParams(clusterSize, clusterSize).apply {
+            gravity = Gravity.TOP or Gravity.START
+            leftMargin = (saved.optionsX ?: ((overlayW - clusterSize) / 2)).coerceIn(0, maxX)
+            topMargin = (saved.optionsY ?: ((overlayH - clusterSize) / 2)).coerceIn(0, maxY)
+        }
+        configRoot?.addView(cluster, clusterLp)
+        contextMenuViews.add(cluster)
+        highlightZone(zone.id)
+
         var dragStartRawX = 0f
         var dragStartRawY = 0f
-        var dragStartCx = 0f
-        var dragStartCy = 0f
-
-        dragHandle.setOnTouchListener { _, event ->
+        var dragStartX = 0
+        var dragStartY = 0
+        moveBtn.setOnTouchListener { _, event ->
+            val lp = cluster.layoutParams as? FrameLayout.LayoutParams ?: return@setOnTouchListener false
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     dragStartRawX = event.rawX
                     dragStartRawY = event.rawY
-                    dragStartCx = zone.cx
-                    dragStartCy = zone.cy
+                    dragStartX = lp.leftMargin
+                    dragStartY = lp.topMargin
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val zoneR = if (zone.isStick && zone.inputName.isNotBlank()) zone.outerRadius else zone.innerRadius
-                    zone.cx = (dragStartCx + (event.rawX - dragStartRawX)).coerceIn(zoneR, screenW - zoneR)
-                    zone.cy = (dragStartCy + (event.rawY - dragStartRawY)).coerceIn(zoneR, screenH - zoneR)
-                    val zv = zoneViews[zone.id]
-                    val zvLp = zv?.layoutParams as? FrameLayout.LayoutParams
-                    if (zvLp != null) {
-                        zvLp.leftMargin = (zone.cx - zvLp.width / 2f).toInt()
-                        zvLp.topMargin  = (zone.cy - zvLp.height / 2f).toInt()
-                        zv.layoutParams = zvLp
-                    }
+                    lp.leftMargin = (dragStartX + (event.rawX - dragStartRawX).toInt()).coerceIn(0, maxX)
+                    lp.topMargin = (dragStartY + (event.rawY - dragStartRawY).toInt()).coerceIn(0, maxY)
+                    cluster.layoutParams = lp
                     true
                 }
-                MotionEvent.ACTION_UP -> true
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    DataStore.update { it.copy(optionsX = lp.leftMargin, optionsY = lp.topMargin) }
+                    true
+                }
                 else -> false
             }
         }
@@ -1387,8 +1394,13 @@ class OverlayManager(private val context: Context) {
         keyCatcher?.requestFocus()
     }
 
+    private fun highlightZone(id: String?) {
+        zoneViews.forEach { (zid, v) -> v.setMenuActive(zid == id) }
+    }
+
     private fun dismissContextMenu() {
-        contextMenuViews.forEach { zoneLayer?.removeView(it) }
+        highlightZone(null)
+        contextMenuViews.forEach { (it.parent as? ViewGroup)?.removeView(it) }
         contextMenuViews.clear()
         dismissTuningBox()
         // If the pending zone is already assigned, clear the pending state — the user
@@ -1568,6 +1580,48 @@ class OverlayManager(private val context: Context) {
         private var lastRawX = 0f
         private var lastRawY = 0f
         private var menuHidden = false
+        private var menuActive = false
+
+        private val glowAccent = Color.parseColor("#FF8C00")
+        private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.BUTT
+        }
+        private val glowSpin = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 3600
+            interpolator = LinearInterpolator()
+            repeatCount = ValueAnimator.INFINITE
+            addUpdateListener { invalidate() }
+        }
+        private val glowPulse = ValueAnimator.ofFloat(0.78f, 1f).apply {
+            duration = 1700
+            interpolator = AccelerateDecelerateInterpolator()
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            addUpdateListener { invalidate() }
+        }
+
+        fun setMenuActive(on: Boolean) {
+            if (menuActive == on) {
+                if (on) invalidate()
+                return
+            }
+            menuActive = on
+            if (on) {
+                glowSpin.start()
+                glowPulse.start()
+            } else {
+                glowSpin.cancel()
+                glowPulse.cancel()
+            }
+            invalidate()
+        }
+
+        override fun onDetachedFromWindow() {
+            glowSpin.cancel()
+            glowPulse.cancel()
+            super.onDetachedFromWindow()
+        }
 
         private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(150, 0, 191, 255); style = Paint.Style.FILL }
         private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#00BFFF"); style = Paint.Style.STROKE; strokeWidth = 3f }
@@ -1592,6 +1646,47 @@ class OverlayManager(private val context: Context) {
             return atan2((zone.cy - nearest.second).toDouble(), (zone.cx - nearest.first).toDouble())
         }
 
+        private fun blendGlow(color: Int, amount: Float): Int {
+            val t = amount.coerceIn(0f, 1f)
+            return Color.rgb(
+                (Color.red(color) + (255 - Color.red(color)) * t).toInt(),
+                (Color.green(color) + (255 - Color.green(color)) * t).toInt(),
+                (Color.blue(color) + (255 - Color.blue(color)) * t).toInt()
+            )
+        }
+
+        private fun drawBorderGlow(canvas: Canvas, cx: Float, cy: Float, radius: Float) {
+            val progress = glowSpin.animatedValue as? Float ?: 0f
+            val p = glowPulse.animatedValue as? Float ?: 1f
+            val mid = blendGlow(glowAccent, 0.22f)
+            val hot = blendGlow(glowAccent, 0.78f)
+            val colors = intArrayOf(
+                glowAccent, mid, hot, Color.WHITE, hot, mid, glowAccent,
+                mid, hot, Color.WHITE, hot, mid, glowAccent
+            )
+            val stops = floatArrayOf(
+                0f, 0.16f, 0.21f, 0.24f, 0.27f, 0.32f, 0.42f,
+                0.66f, 0.71f, 0.74f, 0.77f, 0.82f, 1f
+            )
+            val shader = SweepGradient(cx, cy, colors, stops)
+            shader.setLocalMatrix(Matrix().apply { setRotate(progress * 360f, cx, cy) })
+            glowPaint.shader = shader
+            val stroke = 6f
+            glowPaint.strokeWidth = stroke * 1.7f
+            glowPaint.alpha = (70 * p).toInt().coerceIn(0, 255)
+            canvas.drawCircle(cx, cy, radius, glowPaint)
+            glowPaint.strokeWidth = stroke * 1.25f
+            glowPaint.alpha = (165 * p).toInt().coerceIn(0, 255)
+            canvas.drawCircle(cx, cy, radius, glowPaint)
+            glowPaint.strokeWidth = stroke * 1.05f
+            glowPaint.alpha = 255
+            canvas.drawCircle(cx, cy, radius, glowPaint)
+            glowPaint.strokeWidth = stroke * 0.7f
+            canvas.drawCircle(cx, cy, radius, glowPaint)
+            glowPaint.shader = null
+            glowPaint.alpha = 255
+        }
+
         override fun onDraw(canvas: Canvas) {
             val cx = width / 2f; val cy = height / 2f
             if (zone.inputName.isBlank()) {
@@ -1601,6 +1696,15 @@ class OverlayManager(private val context: Context) {
                 textPaint.color = Color.LTGRAY
                 canvas.drawText("?", cx, cy + textPaint.textSize * 0.35f, textPaint)
             } else {
+                if (menuActive) {
+                    fillPaint.color = Color.argb(200, 255, 140, 0)
+                    strokePaint.color = glowAccent
+                    strokePaint.strokeWidth = 5f
+                } else {
+                    fillPaint.color = Color.argb(150, 0, 191, 255)
+                    strokePaint.color = Color.parseColor("#00BFFF")
+                    strokePaint.strokeWidth = 3f
+                }
                 canvas.drawCircle(cx, cy, zone.innerRadius, fillPaint)
                 canvas.drawCircle(cx, cy, zone.innerRadius, strokePaint)
                 if (zone.isStick) {
@@ -1612,6 +1716,10 @@ class OverlayManager(private val context: Context) {
                         cy + sin(ang).toFloat() * zone.outerRadius,
                         dp(10).toFloat(), handlePaint
                     )
+                }
+                if (menuActive) {
+                    val glowR = if (zone.isStick) zone.outerRadius else zone.innerRadius
+                    drawBorderGlow(canvas, cx, cy, glowR)
                 }
                 // Stick zones show a joystick symbol; button zones show the button label
                 val displayText = if (zone.isStick) "\u2295" else zone.inputName
@@ -1763,7 +1871,8 @@ class OverlayManager(private val context: Context) {
         panelLeftBeforeTune = lp.leftMargin
         panelTopBeforeTune = lp.topMargin
         panelHiddenForTune = true
-        contextMenuViews.forEach { zoneLayer?.removeView(it) }
+        highlightZone(null)
+        contextMenuViews.forEach { (it.parent as? ViewGroup)?.removeView(it) }
         contextMenuViews.clear()
         panel.visibility = View.GONE
     }
