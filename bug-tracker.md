@@ -224,6 +224,27 @@ Button options should size the zone with a scrubber on an arc from 8 o’clock (
 
 ---
 
+## BUG-025 — 8ms look/move mux failed badly
+
+**Status:** in progress
+**Reported:** 2026-08-19
+
+Time-slicing move and look made control worse. Remove it.
+
+### Cause
+
+Mux lifted one stick every 8ms so the game saw a tapping finger.
+
+### Attempts
+
+- [in progress] Drop mux. Both sticks stay down; look wrap is the old UP/DOWN again.
+
+### Not tried
+
+- Device confirmation.
+
+---
+
 ## BUG-024 — Overlay mode and layer binds live in the app Home, not the overlay
 
 **Status:** in progress
