@@ -29,6 +29,13 @@ the standard -1..1 range and the controller's reported flat range becomes a zero
 Triggers are normalized separately to 0..1. This is PadMap code and does not use Mantis
 source or assets.
 
+## Sidecar supervision
+
+While a mapped game is active, PadMap runs a low-frequency watchdog. If the local injector
+connection disappears, one guarded background attempt uses PadMap's existing pairing,
+sidecar-start, and ping verification path. It never restores old touches: recovery only
+restores injector availability, and the next physical controller input starts cleanly.
+
 ## Follow-up validation
 
 On device, use two mapped stick zones with four simultaneously held mapped buttons.

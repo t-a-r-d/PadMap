@@ -23,6 +23,7 @@ import com.slickstax841.padmap.data.MappingEntry
 import com.slickstax841.padmap.data.TouchAction
 import com.slickstax841.padmap.data.resolvedBinds
 import com.slickstax841.padmap.inject.SidecarClient
+import com.slickstax841.padmap.inject.SidecarHost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,6 +43,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         private const val STICK_TICK_MS = 16L
         private const val STICK_RELEASE_TICKS = 8
         private const val LOOK_RELEASE_TICKS = 20
+        private const val SIDECAR_WATCHDOG_MS = 3_000L
         // Leave headroom under sidecar MAX_POINTERS (10) so a look wrap or extra tap cannot overflow.
         private const val MAX_LIVE_POINTERS = 8
         private val DEFAULT_AXES = mapOf(
@@ -92,6 +94,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     private var stickLoopRunning = false
     private var lastSidecarWarnMs = 0L
     private var reconciledFailureGeneration = 0L
+    private var recoveryInProgress = false
 
     var foregroundPackage: String = ""
         private set
@@ -112,6 +115,15 @@ class PadMapAccessibilityService : AccessibilityService() {
             tickSticks()
             if (activeSticks.isNotEmpty()) mainHandler.postDelayed(this, STICK_TICK_MS)
             else stickLoopRunning = false
+        }
+    }
+
+    private val sidecarWatchdog = object : Runnable {
+        override fun run() {
+            superviseSidecar()
+            if (instance === this@PadMapAccessibilityService) {
+                mainHandler.postDelayed(this, SIDECAR_WATCHDOG_MS)
+            }
         }
     }
 
@@ -190,6 +202,30 @@ class PadMapAccessibilityService : AccessibilityService() {
         releaseAllPlayback()
     }
 
+    private fun superviseSidecar() {
+        val layout = DataStore.activeLayout
+        if (playingPackage.isBlank() || layout?.mappings.isNullOrEmpty() ||
+            SidecarClient.isAvailable || recoveryInProgress ||
+            !SidecarHost.hasPaired(applicationContext)
+        ) return
+        recoveryInProgress = true
+        PlaybackDebug.log("sidecar watchdog recovering")
+        scope.launch {
+            val recovered = runCatching {
+                SidecarHost.ensureRunning(applicationContext, force = true)
+            }.getOrDefault(false)
+            mainHandler.post {
+                recoveryInProgress = false
+                if (recovered && SidecarClient.isAvailable) {
+                    PlaybackDebug.log("sidecar watchdog recovered")
+                    OverlayManager.instance?.showToast("Injector recovered — press again to resume")
+                } else {
+                    PlaybackDebug.log("sidecar watchdog recovery failed ${SidecarHost.status}")
+                }
+            }
+        }
+    }
+
     private val deviceListener = object : InputManager.InputDeviceListener {
         override fun onInputDeviceAdded(deviceId: Int) {
             val device = InputDevice.getDevice(deviceId) ?: return
@@ -217,6 +253,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         OverlayManager.instance?.startService()
         startKeepAlive()
         SidecarClient.ping()
+        mainHandler.postDelayed(sidecarWatchdog, SIDECAR_WATCHDOG_MS)
         PlaybackDebug.log("a11y connected")
     }
 
@@ -249,6 +286,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         instance = null
         scope.cancel()
         mainHandler.removeCallbacks(stickRunnable)
+        mainHandler.removeCallbacks(sidecarWatchdog)
         stickLoopRunning = false
         SidecarClient.releaseAllAsync()
         activeSticks.clear()

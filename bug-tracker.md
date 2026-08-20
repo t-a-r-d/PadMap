@@ -598,6 +598,23 @@ zone; simple games can hide this while dual-stick games expose drift or uneven r
   device-reported flat zone, and retain the mapping UI as the guided controller capture.
   Source written 2026-08-20; no build or device test yet.
 
+---
+
+## BUG-029 — Injector loss during a game needs manual recovery
+
+**Status:** source attempt complete; awaiting compile and device confirmation
+**Reported:** 2026-08-20
+
+When the sidecar disappears during gameplay, PadMap can clear stale pointers but leaves
+the player to return to Home/Settings and start the injector again.
+
+### Attempts
+
+- [in progress] While a mapped game is active, supervise the sidecar on a low-frequency
+  background check. Guard against overlapping attempts, use the existing verified
+  `SidecarHost.ensureRunning`, and report recovery without restoring old touches.
+  Source written 2026-08-20; no build or device test yet.
+
 ## How to use this file
 
 When a bug is reported:
