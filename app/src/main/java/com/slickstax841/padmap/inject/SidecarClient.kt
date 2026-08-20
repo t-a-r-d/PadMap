@@ -57,6 +57,22 @@ object SidecarClient {
         }
     }
 
+    /**
+     * Playback must never wait for a reconnect. The single [io] writer preserves
+     * command order with queued DOWN/MOVE/UP commands after this probe.
+     */
+    fun pingAsync() {
+        io.execute {
+            try {
+                synchronized(lock) {
+                    if (ensureConnectedLocked()) {
+                        writeAndAckLocked { output!!.writeByte(CMD_PING.toInt()) }
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
     fun pointerDown(id: Int, x: Float, y: Float): Boolean = onIo {
         synchronized(lock) {
             if (!ensureConnectedLocked()) false
@@ -162,6 +178,19 @@ object SidecarClient {
                 if (!ensureConnectedLocked()) false
                 else writeAndAckLocked { output!!.writeByte(CMD_RELEASE.toInt()) }
             }
+        }
+    }
+
+    /** Queue a release behind any already accepted playback work. */
+    fun releaseAllAsync() {
+        io.execute {
+            try {
+                synchronized(lock) {
+                    if (ensureConnectedLocked()) {
+                        writeAndAckLocked { output!!.writeByte(CMD_RELEASE.toInt()) }
+                    }
+                }
+            } catch (_: Throwable) {}
         }
     }
 

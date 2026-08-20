@@ -533,6 +533,37 @@ PadMap created presets and showed the overlay button on apps that are not games 
 
 - Device confirmation.
 
+---
+
+## BUG-026 — Busy game input stalls, releases, or loses a hold
+
+**Status:** source attempt complete; awaiting compile and device confirmation
+**Reported:** 2026-08-20 on Oppo A40 / PadMap v76
+
+When both sticks and several mapped buttons are used, gameplay judders and controls
+can stop/start. A held button can be lost; some games leave PadMap unable to resume
+after returning from its Home/menu route. One-stick games are materially more stable.
+
+### Confirmed cause
+
+`PadMapAccessibilityService` calls synchronous sidecar `pointerDown` / `pointerUp`
+from accessibility callbacks and the stick tick. Each waits for a socket acknowledgement
+(up to three seconds) on the one sidecar executor. Under a combined stick/button load,
+those waits block the input callback path while batched stick frames queue behind them.
+Non-trigger duplicate DOWN also releases and recreates its hold instead of being idempotent.
+
+### Attempts
+
+- [in progress] Keep the existing one-writer sidecar executor, but queue every gameplay
+  DOWN / UP / RELEASE and stick batch without waiting on the accessibility thread. Preserve
+  command order, and treat a repeated DOWN for every already-held button as a no-op.
+  Source written 2026-08-20; `git diff --check` passes. No compilation or device test yet.
+
+### Not tried
+
+- Device confirmation with two sticks plus four simultaneous holds, then game-menu / Home
+  transition and return.
+
 ## How to use this file
 
 When a bug is reported:

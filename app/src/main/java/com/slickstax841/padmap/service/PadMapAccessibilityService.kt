@@ -134,7 +134,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     private fun liftTurboTap(key: String) {
         if (!turboDown.remove(key)) return
         val pid = turboPids[key] ?: return
-        SidecarClient.pointerUp(pid)
+        SidecarClient.pointerUpAsync(pid)
     }
 
     private fun interruptTurboTaps() {
@@ -161,7 +161,10 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     private fun sidecarReady(): Boolean {
-        if (SidecarClient.isAvailable || SidecarClient.ping()) return true
+        if (SidecarClient.isAvailable) return true
+        // A reconnect may take up to the socket timeout. Start it in the sidecar
+        // writer, but never freeze the accessibility callback that received input.
+        SidecarClient.pingAsync()
         val now = System.currentTimeMillis()
         if (now - lastSidecarWarnMs > 2500L) {
             lastSidecarWarnMs = now
@@ -232,7 +235,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         scope.cancel()
         mainHandler.removeCallbacks(stickRunnable)
         stickLoopRunning = false
-        SidecarClient.releaseAll()
+        SidecarClient.releaseAllAsync()
         activeSticks.clear()
         activeHolds.clear()
         freePointerIds.clear()
@@ -274,13 +277,13 @@ class PadMapAccessibilityService : AccessibilityService() {
         activeHolds.keys.toList().forEach { releaseHold(it) }
         for (label in activeSticks.keys.toList()) {
             val state = activeSticks.remove(label) ?: continue
-            SidecarClient.pointerUp(state.pointerId)
+            SidecarClient.pointerUpAsync(state.pointerId)
             freePointer(state.pointerId)
         }
         stickDeadTicks.clear()
         hatState.clear()
         triggerState.clear()
-        SidecarClient.releaseAll()
+        SidecarClient.releaseAllAsync()
         inFlightTaps = 0
         playbackGen++
         OverlayManager.instance?.setIconPassThrough(false)
@@ -310,7 +313,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         walkJobs.clear()
         for (label in activeSticks.keys.toList()) {
             val state = activeSticks.remove(label) ?: continue
-            SidecarClient.pointerUp(state.pointerId)
+            SidecarClient.pointerUpAsync(state.pointerId)
             freePointer(state.pointerId)
         }
         stickDeadTicks.clear()
@@ -612,8 +615,9 @@ class PadMapAccessibilityService : AccessibilityService() {
         if (nonTurbo.isNotEmpty()) {
             if (activeHolds.containsKey(label)) {
                 PlaybackDebug.log("btn $label re-down")
-                if (label == "LT" || label == "RT") return
-                releaseHold(label)
+                // Controllers and OEM input stacks can repeat ACTION_DOWN. A
+                // physical hold owns its pointer until its matching ACTION_UP.
+                return
             }
             startHold(label, nonTurbo)
         }
@@ -651,7 +655,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         }
         activeHolds.remove(label)?.let { old ->
             old.pointerIds.forEach { pid ->
-                SidecarClient.pointerUp(pid)
+                SidecarClient.pointerUpAsync(pid)
                 freePointer(pid)
             }
         }
@@ -670,15 +674,15 @@ class PadMapAccessibilityService : AccessibilityService() {
         entries.forEachIndexed { i, entry ->
             val (x, y) = tapXY(entry)
             OverlayManager.instance?.noteInject(x, y)
-            val ok = SidecarClient.pointerDown(pids[i], x, y)
-            PlaybackDebug.log("down $label pid=${pids[i]} ${x.toInt()},${y.toInt()} ok=$ok ${SidecarClient.lastError}")
+            SidecarClient.pointerDownAsync(pids[i], x, y)
+            PlaybackDebug.log("down $label pid=${pids[i]} ${x.toInt()},${y.toInt()} queued")
         }
     }
 
     private fun releaseHold(label: String) {
         val hold = activeHolds.remove(label) ?: return
         hold.pointerIds.forEach { pid ->
-            SidecarClient.pointerUp(pid)
+            SidecarClient.pointerUpAsync(pid)
             freePointer(pid)
         }
         syncIconPassThrough()
@@ -718,7 +722,7 @@ class PadMapAccessibilityService : AccessibilityService() {
                         }
                         if (turboDown.contains(key)) liftTurboTap(key)
                         OverlayManager.instance?.noteInject(x, y)
-                        SidecarClient.pointerDown(pid, x, y)
+                        SidecarClient.pointerDownAsync(pid, x, y)
                         turboDown.add(key)
                     }
                     delay(holdMs)
@@ -784,8 +788,8 @@ class PadMapAccessibilityService : AccessibilityService() {
         stickDeadTicks[label] = 0
         syncIconPassThrough()
         OverlayManager.instance?.noteInject(drag.centerX, drag.centerY)
-        val ok = SidecarClient.pointerDown(pid, drag.centerX, drag.centerY)
-        PlaybackDebug.log("stick $label down pid=$pid ${drag.centerX.toInt()},${drag.centerY.toInt()} ok=$ok ${SidecarClient.lastError}")
+        SidecarClient.pointerDownAsync(pid, drag.centerX, drag.centerY)
+        PlaybackDebug.log("stick $label down pid=$pid ${drag.centerX.toInt()},${drag.centerY.toInt()} queued")
         ensureStickLoop()
     }
 
@@ -866,7 +870,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         for (label in toRelease) {
             val state = activeSticks.remove(label) ?: continue
             stickDeadTicks.remove(label)
-            SidecarClient.pointerUp(state.pointerId)
+            SidecarClient.pointerUpAsync(state.pointerId)
             freePointer(state.pointerId)
             PlaybackDebug.log("stick $label up")
         }
