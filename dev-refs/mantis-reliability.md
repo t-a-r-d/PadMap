@@ -17,6 +17,18 @@ queued through it: DOWN, UP, RELEASE, reconnect probe, and batched stick MOVE. T
 submission order is preserved, but accessibility callbacks do not wait for an ACK.
 A duplicate DOWN for an already-held button is a no-op until the matching UP arrives.
 
+## PadMap-native recovery and normalization
+
+The sidecar now exposes a monotonically increasing failure generation. Before handling
+new key or motion input, PadMap compares it with the last reconciled value. A new failure
+while playback owns pointers releases the local ownership and queues one injector release,
+so a future physical DOWN starts cleanly rather than inheriting stale state.
+
+Stick axes are normalized from Android's `InputDevice.MotionRange`: centre and span become
+the standard -1..1 range and the controller's reported flat range becomes a zero region.
+Triggers are normalized separately to 0..1. This is PadMap code and does not use Mantis
+source or assets.
+
 ## Follow-up validation
 
 On device, use two mapped stick zones with four simultaneously held mapped buttons.

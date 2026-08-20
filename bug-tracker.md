@@ -564,6 +564,40 @@ Non-trigger duplicate DOWN also releases and recreates its hold instead of being
 - Device confirmation with two sticks plus four simultaneous holds, then game-menu / Home
   transition and return.
 
+---
+
+## BUG-027 — Playback cannot reconcile after asynchronous injector failure
+
+**Status:** source attempt complete; awaiting compile and device confirmation
+**Reported:** 2026-08-20
+
+After a sidecar command fails during a busy game, PadMap's local pointer maps can remain
+held while the injector has disconnected or reset. Later input then appears dead until a
+larger lifecycle event happens to clear it.
+
+### Attempts
+
+- [in progress] Give the PadMap sidecar client a monotonic command-failure generation and
+  make the accessibility service reconcile local and injector state once per failure.
+  Source written 2026-08-20; no build or device test yet.
+
+---
+
+## BUG-028 — Controller setup does not normalize real device axis ranges
+
+**Status:** source attempt complete; awaiting compile and device confirmation
+**Reported:** 2026-08-20
+
+PadMap stores button/axis labels in a controller preset but uses raw axis values during
+playback. Controllers can expose non-unit ranges, a non-zero centre, and a hardware flat
+zone; simple games can hide this while dual-stick games expose drift or uneven response.
+
+### Attempts
+
+- [in progress] Normalize each received axis from its Android motion range, subtract the
+  device-reported flat zone, and retain the mapping UI as the guided controller capture.
+  Source written 2026-08-20; no build or device test yet.
+
 ## How to use this file
 
 When a bug is reported:

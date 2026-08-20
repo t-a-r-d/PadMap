@@ -8,6 +8,7 @@ import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -39,6 +40,7 @@ object SidecarClient {
     private var input: DataInputStream? = null
     private var output: DataOutputStream? = null
     private val connected = AtomicBoolean(false)
+    private val failures = AtomicLong(0L)
     private val ioThread = AtomicReference<Thread?>(null)
     private val io = Executors.newSingleThreadExecutor { r ->
         Thread(r, "padmap-sidecar").apply {
@@ -49,6 +51,10 @@ object SidecarClient {
 
     val isAvailable: Boolean
         get() = connected.get()
+
+    /** Increments for each command/connect failure; consumers reconcile once per value. */
+    val failureGeneration: Long
+        get() = failures.get()
 
     fun ping(): Boolean = onIo {
         synchronized(lock) {
@@ -235,6 +241,7 @@ object SidecarClient {
             out.flush()
             if (inp.readByte().toInt() != 0) {
                 lastError = "sidecar rejected token"
+                failures.incrementAndGet()
                 s.close()
                 return false
             }
@@ -246,6 +253,7 @@ object SidecarClient {
             true
         } catch (t: Throwable) {
             lastError = t.message ?: t.javaClass.simpleName
+            failures.incrementAndGet()
             closeLocked()
             false
         }
@@ -256,10 +264,14 @@ object SidecarClient {
             write()
             output!!.flush()
             val ok = input!!.readByte().toInt() == 0
-            if (!ok) lastError = "sidecar command failed"
+            if (!ok) {
+                lastError = "sidecar command failed"
+                failures.incrementAndGet()
+            }
             ok
         } catch (t: Throwable) {
             lastError = t.message ?: t.javaClass.simpleName
+            failures.incrementAndGet()
             closeLocked()
             false
         }

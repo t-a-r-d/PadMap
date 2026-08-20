@@ -91,6 +91,7 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     private var stickLoopRunning = false
     private var lastSidecarWarnMs = 0L
+    private var reconciledFailureGeneration = 0L
 
     var foregroundPackage: String = ""
         private set
@@ -173,6 +174,20 @@ class PadMapAccessibilityService : AccessibilityService() {
             OverlayManager.instance?.showToast("Injector off ($why) — Settings → OPEN DEVELOPER")
         }
         return false
+    }
+
+    /**
+     * The sidecar is authoritative for injected pointers. If it rejects or loses
+     * a queued command, discard local ownership once so the next physical press
+     * begins a clean session instead of preserving ghost holds.
+     */
+    private fun reconcileInjectorFailure() {
+        val generation = SidecarClient.failureGeneration
+        if (generation <= reconciledFailureGeneration) return
+        reconciledFailureGeneration = generation
+        if (!isPlaybackBusy) return
+        PlaybackDebug.log("injector failure $generation; reconcile playback")
+        releaseAllPlayback()
     }
 
     private val deviceListener = object : InputManager.InputDeviceListener {
@@ -339,6 +354,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     fun handlePlaybackMotion(event: MotionEvent) {
+        reconcileInjectorFailure()
         if (playingPackage.isEmpty()) return
         val layout = DataStore.activeLayout
         if (layout == null) {
@@ -358,7 +374,7 @@ class PadMapAccessibilityService : AccessibilityService() {
             if (axisCode == MotionEvent.AXIS_HAT_X || axisCode == MotionEvent.AXIS_HAT_Y) continue
             val stickLabel = axisLabelStr.removeSuffix(" X").removeSuffix(" Y")
             if (layerMappings(layout).none { it.inputName == stickLabel }) continue
-            val value = event.getAxisValue(axisCode)
+            val value = normalizedStickAxis(event, axisCode)
             val isX = axisLabelStr.endsWith(" X")
             val cur = axisValues[stickLabel] ?: (0f to 0f)
             axisValues[stickLabel] = if (isX) cur.copy(first = value) else cur.copy(second = value)
@@ -479,6 +495,7 @@ class PadMapAccessibilityService : AccessibilityService() {
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
+        reconcileInjectorFailure()
         val overlay = OverlayManager.instance
         if (event.action == KeyEvent.ACTION_DOWN &&
             overlay?.pendingZoneId != null &&
@@ -898,7 +915,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         event: MotionEvent, layout: GameLayout, label: String, primary: Int, alt: Int
     ) {
         if (layerMappings(layout).none { it.inputName == label }) return
-        val value = maxOf(event.getAxisValue(primary), event.getAxisValue(alt))
+        val value = maxOf(normalizedTriggerAxis(event, primary), normalizedTriggerAxis(event, alt))
         val was = triggerState[label] == true
         val now = if (was) value > 0.35f else value > 0.55f
         if (now && !was) onButtonDown(label)
@@ -926,6 +943,28 @@ class PadMapAccessibilityService : AccessibilityService() {
             if (!nowPressed && wasPressed) onButtonUp(label)
             hatState[label] = nowPressed
         }
+    }
+
+    /** Normalize OEM/controller-specific axis ranges to the -1..1 stick range. */
+    private fun normalizedStickAxis(event: MotionEvent, axis: Int): Float {
+        val range = event.device?.getMotionRange(axis) ?: return event.getAxisValue(axis)
+        val half = (range.max - range.min) / 2f
+        if (half <= 0f) return event.getAxisValue(axis)
+        val centred = ((event.getAxisValue(axis) - (range.min + range.max) / 2f) / half)
+            .coerceIn(-1f, 1f)
+        val flat = (range.flat / half).coerceIn(0f, 0.95f)
+        if (kotlin.math.abs(centred) <= flat) return 0f
+        return ((kotlin.math.abs(centred) - flat) / (1f - flat) * if (centred < 0f) -1f else 1f)
+    }
+
+    /** Normalize trigger ranges to 0..1, retaining their hardware flat zone. */
+    private fun normalizedTriggerAxis(event: MotionEvent, axis: Int): Float {
+        val range = event.device?.getMotionRange(axis) ?: return event.getAxisValue(axis).coerceIn(0f, 1f)
+        val span = range.max - range.min
+        if (span <= 0f) return 0f
+        val normalized = ((event.getAxisValue(axis) - range.min) / span).coerceIn(0f, 1f)
+        val flat = (range.flat / span).coerceIn(0f, 0.95f)
+        return if (normalized <= flat) 0f else ((normalized - flat) / (1f - flat)).coerceIn(0f, 1f)
     }
 
     private fun labelFor(keyCode: Int): String? {
