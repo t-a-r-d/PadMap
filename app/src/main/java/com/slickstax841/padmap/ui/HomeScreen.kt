@@ -61,7 +61,8 @@ private data class SetupStep(
     val title: String,
     val instructions: String,
     val actionLabel: String,
-    val onAction: () -> Unit
+    val onAction: () -> Unit,
+    val requiresSystemConfirmation: Boolean = false
 )
 
 @Composable
@@ -485,6 +486,7 @@ private fun SetupWizardDialog(
     onRefresh: () -> Unit
 ) {
     val skin = LocalAppSkin.current
+    var systemConfirmationStep by remember { mutableStateOf<SetupStep?>(null) }
     val injectorStartReady = hasOverlay && hasA11y && hasConnectedController &&
         wirelessDebugOn && hasPairedInjector && hasMappedGame
     val steps = buildList {
@@ -492,13 +494,15 @@ private fun SetupWizardDialog(
             "Allow overlay",
             "Allow PadMap to display its in-game config button over other apps.",
             "OPEN OVERLAY SETTINGS",
-            onOpenOverlay
+            onOpenOverlay,
+            requiresSystemConfirmation = true
         ))
         if (!hasA11y) add(SetupStep(
             "Enable PadMap accessibility",
             "In Installed apps, enable PadMap. Android needs this permission to receive your controller input.",
             "OPEN ACCESSIBILITY",
-            onOpenAccessibility
+            onOpenAccessibility,
+            requiresSystemConfirmation = true
         ))
         if (!hasConnectedController) add(SetupStep(
             "Connect your controller",
@@ -510,7 +514,8 @@ private fun SetupWizardDialog(
             "Enable Wireless debugging",
             "Turn on Wireless debugging in Developer options and allow it on this Wi-Fi network.",
             "OPEN DEVELOPER OPTIONS",
-            onOpenWirelessDebugging
+            onOpenWirelessDebugging,
+            requiresSystemConfirmation = true
         ))
         if (!hasPairedInjector) add(SetupStep(
             "Pair the injector",
@@ -552,7 +557,10 @@ private fun SetupWizardDialog(
             }
         },
         confirmButton = {
-            GamerTextButton(onClick = step?.onAction ?: onDismiss) {
+            GamerTextButton(onClick = {
+                if (step?.requiresSystemConfirmation == true) systemConfirmationStep = step
+                else (step?.onAction ?: onDismiss).invoke()
+            }) {
                 Text(step?.actionLabel ?: "DONE", color = skin.accent)
             }
         },
@@ -560,6 +568,31 @@ private fun SetupWizardDialog(
             GamerTextButton(onClick = onRefresh) { Text("CHECK AGAIN", color = skin.textSecondary) }
         }
     )
+    systemConfirmationStep?.let { pendingStep ->
+        AlertDialog(
+            onDismissRequest = { systemConfirmationStep = null },
+            title = { Text("Open Android settings", color = skin.textPrimary, fontFamily = skin.headingFont) },
+            text = {
+                Text(
+                    "Android protects ${pendingStep.title.lowercase()} and only its own screen can enable it. " +
+                        "Tap OPEN ANDROID SCREEN, make the change, then return to PadMap. The wizard checks it automatically.",
+                    color = skin.textSecondary,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                GamerTextButton(onClick = {
+                    systemConfirmationStep = null
+                    pendingStep.onAction()
+                }) { Text("OPEN ANDROID SCREEN", color = skin.accent) }
+            },
+            dismissButton = {
+                GamerTextButton(onClick = { systemConfirmationStep = null }) {
+                    Text("CANCEL", color = skin.textSecondary)
+                }
+            }
+        )
+    }
 }
 
 @Composable private fun SectionLabel(text: String) {
