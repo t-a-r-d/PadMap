@@ -67,6 +67,8 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
     var hasA11y by remember { mutableStateOf(isA11yEnabled(ctx)) }
     var hasInjector by remember { mutableStateOf(SidecarClient.isAvailable) }
     var wirelessDebugOn by remember { mutableStateOf(SidecarHost.isWirelessDebugOn(ctx)) }
+    var showSetupWizard by rememberSaveable { mutableStateOf(false) }
+    val setupNeeded = !hasOverlay || !hasA11y || !wirelessDebugOn || !hasInjector
     // Scan for a connected gamepad, build a preset from its reported capabilities, and save it.
     // Called on every resume so a newly connected controller is picked up automatically.
     fun scanAndSaveController() {
@@ -213,6 +215,20 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     }
                 }
                 Spacer(Modifier.height(4.dp))
+            }
+
+            if (setupNeeded) {
+                item {
+                    TextButton(
+                        onClick = { showSetupWizard = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(skin.activeItemBg)
+                    ) {
+                        Text("SET UP PADMAP", color = skin.accent, fontSize = 13.sp)
+                    }
+                }
             }
 
             item {
@@ -426,6 +442,71 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
             item { Spacer(Modifier.height(40.dp)) }
         }
     }
+    if (showSetupWizard) {
+        SetupWizardDialog(
+            hasOverlay = hasOverlay,
+            hasA11y = hasA11y,
+            wirelessDebugOn = wirelessDebugOn,
+            hasInjector = hasInjector,
+            onDismiss = { showSetupWizard = false },
+            onOpenOverlay = {
+                ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:${ctx.packageName}")).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
+            },
+            onOpenAccessibility = {
+                ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+            },
+            onOpenWirelessDebugging = { openWirelessDebuggingSettings(ctx) },
+            onOpenInjector = onSettings
+        )
+    }
+}
+
+@Composable
+private fun SetupWizardDialog(
+    hasOverlay: Boolean,
+    hasA11y: Boolean,
+    wirelessDebugOn: Boolean,
+    hasInjector: Boolean,
+    onDismiss: () -> Unit,
+    onOpenOverlay: () -> Unit,
+    onOpenAccessibility: () -> Unit,
+    onOpenWirelessDebugging: () -> Unit,
+    onOpenInjector: () -> Unit
+) {
+    val skin = LocalAppSkin.current
+    val step = when {
+        !hasOverlay -> Triple("1 of 4", "Allow overlay", "Open Android's PadMap overlay permission and allow it.")
+        !hasA11y -> Triple("2 of 4", "Enable accessibility", "Enable PadMap under Android's installed accessibility apps.")
+        !wirelessDebugOn -> Triple("3 of 4", "Enable Wireless debugging", "Turn it on and allow debugging on this Wi-Fi network.")
+        !hasInjector -> Triple("4 of 4", "Pair and start injector", "Pair once, then start the verified injector.")
+        else -> Triple("Ready", "PadMap is ready", "Overlay, accessibility, wireless debugging, and injector are active.")
+    }
+    val action = when {
+        !hasOverlay -> onOpenOverlay
+        !hasA11y -> onOpenAccessibility
+        !wirelessDebugOn -> onOpenWirelessDebugging
+        !hasInjector -> onOpenInjector
+        else -> onDismiss
+    }
+    val actionLabel = if (step.first == "Ready") "DONE" else "OPEN STEP"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Set up PadMap", color = skin.textPrimary, fontFamily = skin.headingFont) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(step.first, color = skin.accent, fontSize = 12.sp, fontFamily = skin.labelFont)
+                Text(step.second, color = skin.textPrimary, fontWeight = FontWeight.SemiBold)
+                Text(step.third, color = skin.textSecondary, fontSize = 13.sp)
+                Text("Return here after Android confirms each step; this wizard advances automatically.",
+                    color = skin.textSecondary, fontSize = 12.sp)
+            }
+        },
+        confirmButton = { TextButton(onClick = action) { Text(actionLabel, color = skin.accent) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("LATER", color = skin.textSecondary) } }
+    )
 }
 
 @Composable private fun SectionLabel(text: String) {
