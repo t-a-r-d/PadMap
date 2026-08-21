@@ -615,6 +615,24 @@ the player to return to Home/Settings and start the injector again.
   `SidecarHost.ensureRunning`, and report recovery without restoring old touches.
   Source written 2026-08-20; no build or device test yet.
 
+---
+
+## BUG-030 — Stick-related game/app exit lacks a decisive crash record
+
+**Status:** source attempt complete; awaiting build and device reproduction
+**Reported:** 2026-08-21 on PadMap v77
+
+Under dual-stick gameplay, PadMap appears to close or cease stick interception. Native
+gamepad buttons can still work afterwards, which may indicate PadMap's service/overlay
+path failed rather than the game process itself. The existing log only records a stick-tick
+exception class, not its stack or the last stick/pointer state.
+
+### Attempts
+
+- [in progress] Persist a synchronous non-fatal stack trace and stick/pointer context for
+  every protected stick-tick failure. Keep the existing process-wide fatal crash hook.
+  Source written 2026-08-21; no build or device test yet.
+
 ## How to use this file
 
 When a bug is reported:

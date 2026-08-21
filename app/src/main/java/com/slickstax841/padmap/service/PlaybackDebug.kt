@@ -14,6 +14,7 @@ object PlaybackDebug {
     private val lines = ArrayDeque<String>()
     private val lock = Any()
     private var lastMotionLogMs = 0L
+    @Volatile private var lastStickContext = "none"
     private var file: File? = null
     private var appVer = "?"
     private val io = Executors.newSingleThreadExecutor { r ->
@@ -57,6 +58,22 @@ object PlaybackDebug {
         log(msg)
     }
 
+    /** Lightweight state retained for a later fault; it does not write per frame. */
+    fun noteStickContext(context: String) {
+        lastStickContext = context
+    }
+
+    /** Persist a protected-path failure before allowing gameplay to continue. */
+    fun recordFault(tag: String, error: Throwable) {
+        val line = "${System.currentTimeMillis() % 100_000} FAULT $tag " +
+            "${error.javaClass.simpleName}: ${error.message} sticks=$lastStickContext"
+        synchronized(lock) {
+            lines.addLast(line)
+            while (lines.size > MAX) lines.removeFirst()
+        }
+        writeCrash(line + "\n" + error.stackTraceToString() + "\n")
+    }
+
     fun snapshot(): String {
         val layout = DataStore.activeLayout
         val data = DataStore.data.value
@@ -77,6 +94,7 @@ object PlaybackDebug {
                     "layer=${svc?.activeLayer ?: 1}"
             )
             appendLine(svc?.debugExtras ?: "a11y=null")
+            appendLine("lastStick=$lastStickContext")
             appendLine(
                 "overlay=${OverlayManager.instance?.state} pending=${OverlayManager.instance?.pendingZoneId}"
             )
@@ -134,7 +152,7 @@ object PlaybackDebug {
                 lines.addLast(line)
                 while (lines.size > MAX) lines.removeFirst()
             }
-            writeCrash(line + "\n" + stack + "\n")
+            writeCrash(line + " sticks=$lastStickContext\n" + stack + "\n")
             prev?.uncaughtException(t, e)
         }
     }

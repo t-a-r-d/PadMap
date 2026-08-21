@@ -851,9 +851,13 @@ class PadMapAccessibilityService : AccessibilityService() {
     private fun tickSticks() {
         if (activeSticks.isEmpty()) return
         try {
+            PlaybackDebug.noteStickContext(
+                "active=${activeSticks.mapValues { it.value.pointerId }} axes=$axisValues " +
+                    "holds=${activeHolds.keys} free=$freePointerIds"
+            )
             tickSticksInner()
         } catch (t: Throwable) {
-            PlaybackDebug.log("stick tick ${t.javaClass.simpleName}")
+            PlaybackDebug.recordFault("stick tick", t)
         }
     }
 

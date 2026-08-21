@@ -36,6 +36,13 @@ connection disappears, one guarded background attempt uses PadMap's existing pai
 sidecar-start, and ping verification path. It never restores old touches: recovery only
 restores injector availability, and the next physical controller input starts cleanly.
 
+## Stick-fault capture
+
+PadMap keeps its own crash diagnostics. Fatal process exceptions are appended synchronously
+to `playback-debug.log`; protected stick-tick failures now also persist the full stack trace
+and last known active-pointer, axis, hold, and free-pointer state. This captures evidence
+without copying any competitor code.
+
 ## Follow-up validation
 
 On device, use two mapped stick zones with four simultaneously held mapped buttons.
