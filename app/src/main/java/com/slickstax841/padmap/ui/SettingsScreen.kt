@@ -237,12 +237,6 @@ private fun InjectorCard(skin: AppSkin) {
         }
         if (logText.isNotBlank() && logText != "Injector running") {
             Spacer(Modifier.height(12.dp))
-            TextButton(
-                onClick = { shareInjectorLog(ctx, logText) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
-            }
             Text(
                 logText,
                 fontSize = 11.sp,
