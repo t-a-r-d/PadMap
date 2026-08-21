@@ -49,6 +49,7 @@ class OverlayManager(private val context: Context) {
             "com.oplus.systemui",
             "com.coloros.systemui",
             "com.oppo.systemui",
+            "com.oplus.gesture",
             "com.android.permissioncontroller",
             "com.google.android.permissioncontroller"
         ) + BLOCKED_PACKAGES

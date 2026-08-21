@@ -188,7 +188,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                         }
                         hasInjector = result.getOrDefault(false) || SidecarClient.isAvailable
                         result.exceptionOrNull()?.let {
-                            Toast.makeText(ctx, "Injector failed — open Settings for the log", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, "Injector failed — use the injector card at the top", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
@@ -252,35 +252,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
             }
 
             item {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(skin.surfaceCol)
-                        .padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(RoundedCornerShape(5.dp))
-                            .background(if (hasInjector) Color(0xFF00DD66) else Color(0xFFFF8800))
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        if (hasInjector) "Injector running" else "Injector not running",
-                        modifier = Modifier.weight(1f),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = skin.textPrimary,
-                        fontFamily = skin.labelFont
-                    )
-                    if (!hasInjector) {
-                        GamerTextButton(onClick = onSettings) {
-                            Text("FIX", color = skin.accent, fontSize = 12.sp)
-                        }
-                    }
-                }
+                InjectorCard(skin = skin)
             }
 
             if (!wirelessDebugOn) {
@@ -487,7 +459,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 })
             },
             onOpenWirelessDebugging = { openWirelessDebuggingSettings(ctx) },
-            onOpenInjector = onSettings,
+            onOpenInjector = { showSetupWizard = false },
             onOpenGame = { showSetupWizard = false },
             onRefresh = { refreshSetupState() }
         )
@@ -540,14 +512,14 @@ private fun SetupWizardDialog(
         ))
         if (!hasPairedInjector) add(SetupStep(
             "Pair the injector",
-            "Open Settings, keep the Android Pair with pairing code screen open, then use PadMap's pair pad to enter its six-digit code.",
-            "OPEN INJECTOR SETUP",
+            "Close this wizard. The injector setup card at the top of Home has the pair pad and code fields.",
+            "SHOW INJECTOR SETUP",
             onOpenInjector
         ))
         if (hasPairedInjector && !hasInjector) add(SetupStep(
             "Start the injector",
-            "Your phone is already paired. Open Injector setup and tap START; no pairing code is needed again.",
-            "OPEN INJECTOR SETUP",
+            "Close this wizard and tap START in the injector card at the top of Home; no pairing code is needed again.",
+            "SHOW INJECTOR START",
             onOpenInjector
         ))
         if (!hasMappedGame) add(SetupStep(

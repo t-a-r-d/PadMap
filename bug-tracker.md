@@ -5,6 +5,36 @@ CC reads this before investigating any bug.
 
 ---
 
+## BUG-032 — Transient OEM windows release mapped controls during gameplay
+
+**Status:** fix written — device confirmation pending
+**Reported:** 2026-08-21 on Oppo / ColorOS
+
+While playing Evil Lands, the debug log records `leave game for com.oplus.gesture`
+immediately after active RT holds are released. It later records a real
+`leave game for com.android.launcher` when Home opens. A transient Android/OEM
+window must never interrupt mapped touches; an actual departure from the game
+must still release them safely.
+
+### Cause
+
+`TYPE_WINDOW_STATE_CHANGED` treats every non-game package outside a short
+allow-list as an immediate game exit. `com.oplus.gesture` is an OEM transient
+package not covered by that list.
+
+### Attempts
+
+- [written] 2026-08-21: treat `com.oplus.gesture` as transient and defer all other
+  non-game exits briefly. Confirm the active accessibility window is still
+  outside the game before releasing playback, so a short-lived OEM window
+  cannot clear active holds.
+
+### Not tried
+
+- Device confirmation during repeated RT holds and a real Home/launcher exit.
+
+---
+
 ## BUG-031 — v78 Kotlin compilation fails after gamer styling
 
 **Status:** fixed — v78 build verified

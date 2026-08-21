@@ -89,18 +89,12 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
             }
 
-            Spacer(Modifier.height(24.dp))
-
-            Text("INJECTOR", fontSize = 11.sp, color = skin.textSecondary, letterSpacing = 2.sp,
-                fontFamily = skin.labelFont)
-            Spacer(Modifier.height(12.dp))
-            InjectorCard(skin = skin)
         }
     }
 }
 
 @Composable
-private fun InjectorCard(skin: AppSkin) {
+internal fun InjectorCard(skin: AppSkin) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var code by remember { mutableStateOf("") }

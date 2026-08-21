@@ -44,6 +44,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         private const val STICK_RELEASE_TICKS = 8
         private const val LOOK_RELEASE_TICKS = 20
         private const val SIDECAR_WATCHDOG_MS = 3_000L
+        private const val GAME_EXIT_CONFIRM_MS = 400L
         // Leave headroom under sidecar MAX_POINTERS (10) so a look wrap or extra tap cannot overflow.
         private const val MAX_LIVE_POINTERS = 8
         private val DEFAULT_AXES = mapOf(
@@ -95,6 +96,37 @@ class PadMapAccessibilityService : AccessibilityService() {
     private var lastSidecarWarnMs = 0L
     private var reconciledFailureGeneration = 0L
     private var recoveryInProgress = false
+    private var pendingLeavePackage = ""
+    private val confirmGameExitRunnable = Runnable {
+        val leavingFor = pendingLeavePackage
+        pendingLeavePackage = ""
+        if (leavingFor.isBlank() || playingPackage.isBlank()) return@Runnable
+        val activePackage = rootInActiveWindow?.packageName?.toString()
+        if (activePackage == playingPackage ||
+            (activePackage != null && activePackage in OverlayManager.TRANSIENT_PACKAGES) ||
+            activePackage == packageName) {
+            PlaybackDebug.log("ignore transient leave for $leavingFor active=${activePackage ?: "unknown"}")
+            return@Runnable
+        }
+        foregroundPackage = activePackage ?: leavingFor
+        releaseAllPlayback()
+        playingPackage = ""
+        PlaybackDebug.log("leave game confirmed for ${foregroundPackage}")
+        OverlayManager.instance?.repositionForGame(foregroundPackage)
+        updateInputInterception()
+    }
+
+    private fun cancelPendingGameExit() {
+        pendingLeavePackage = ""
+        mainHandler.removeCallbacks(confirmGameExitRunnable)
+    }
+
+    private fun confirmGameExit(pkg: String) {
+        if (playingPackage.isBlank()) return
+        pendingLeavePackage = pkg
+        mainHandler.removeCallbacks(confirmGameExitRunnable)
+        mainHandler.postDelayed(confirmGameExitRunnable, GAME_EXIT_CONFIRM_MS)
+    }
 
     var foregroundPackage: String = ""
         private set
@@ -282,6 +314,7 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         PlaybackDebug.log("a11y destroy")
+        cancelPendingGameExit()
         super.onDestroy()
         instance = null
         scope.cancel()
@@ -301,6 +334,7 @@ class PadMapAccessibilityService : AccessibilityService() {
 
     fun restoreGamePackage(pkg: String) {
         if (pkg.isBlank()) return
+        cancelPendingGameExit()
         foregroundPackage = pkg
         lastGamePackage = pkg
         if (playingPackage != pkg) {
@@ -446,9 +480,10 @@ class PadMapAccessibilityService : AccessibilityService() {
                 val pkg = event.packageName?.toString() ?: return
                 if (pkg in OverlayManager.TRANSIENT_PACKAGES) return
                 if (pkg == packageName) return
-                foregroundPackage = pkg
                 val isGame = com.slickstax841.padmap.data.GameScanner.isInstalledGame(this, pkg)
                 if (isGame) {
+                    cancelPendingGameExit()
+                    foregroundPackage = pkg
                     lastGamePackage = pkg
                     if (playingPackage != pkg) {
                         releaseAllPlayback()
@@ -496,10 +531,10 @@ class PadMapAccessibilityService : AccessibilityService() {
                     }
                 } else {
                     if (playingPackage.isNotEmpty()) {
-                        releaseAllPlayback()
-                        playingPackage = ""
-                        PlaybackDebug.log("leave game for $pkg")
+                        confirmGameExit(pkg)
+                        return
                     }
+                    foregroundPackage = pkg
                     OverlayManager.instance?.repositionForGame(pkg)
                 }
                 updateInputInterception()
