@@ -322,7 +322,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
             item {
                 Spacer(Modifier.height(4.dp))
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                    SectionLabel("CONTROLLER PRESETS")
+                    SectionLabel("CONTROLLERS")
                     TextButton(onClick = {
                         val id = UUID.randomUUID().toString()
                         DataStore.update { it.copy(controllerPresets = it.controllerPresets + ControllerPreset(id = id, name = "New Controller")) }
