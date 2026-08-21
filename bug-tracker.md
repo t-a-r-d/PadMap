@@ -5,6 +5,27 @@ CC reads this before investigating any bug.
 
 ---
 
+## BUG-031 — v78 Kotlin compilation fails after gamer styling
+
+**Status:** fix in progress
+**Reported:** 2026-08-21
+
+`assembleDebug` fails in `:app:compileDebugKotlin` with unresolved references for
+`rememberSaveable`, `matchParentSize`, `clip`, and `TextButtonDefaults`.
+
+### Cause
+
+The gamer-styling commit used an omitted Saveable-state import, an omitted clip import,
+Foundation Layout without a direct dependency, and a newer `TextButtonDefaults` API than
+the pinned Compose BOM provides.
+
+### Attempts
+
+- [in progress] Add the two imports and Foundation Layout dependency; use the compatible
+  `ButtonDefaults.textButtonColors` API. Build verification pending.
+
+---
+
 ## BUG-001 — Wireless debugging “connected” toast loops (Oppo A40)
 
 **Status:** v61 dump: inject init ok; process dies on ADB detach.

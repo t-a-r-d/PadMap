@@ -11,10 +11,11 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextButtonDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -121,7 +122,7 @@ fun GamerTextButton(
             .clip(shape)
             .background(skin.surfaceVar.copy(alpha = 0.88f))
             .border(1.dp, skin.accent.copy(alpha = if (enabled) 0.72f else 0.24f), shape),
-        colors = TextButtonDefaults.textButtonColors(
+        colors = ButtonDefaults.textButtonColors(
             contentColor = skin.accent,
             disabledContentColor = skin.textSecondary.copy(alpha = 0.55f)
         ),
