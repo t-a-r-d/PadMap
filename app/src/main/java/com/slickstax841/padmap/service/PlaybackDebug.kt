@@ -133,6 +133,14 @@ object PlaybackDebug {
         }
     }
 
+    fun eventLog(): String = synchronized(lock) { lines.joinToString("\n") }
+
+    fun clear() {
+        synchronized(lock) { lines.clear() }
+        val f = file
+        io.execute { runCatching { f?.writeText("") } }
+    }
+
     private fun rewriteDisk() {
         val f = file ?: return
         val body = synchronized(lock) { lines.joinToString("\n") + "\n" }

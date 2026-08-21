@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -23,6 +24,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -75,18 +77,51 @@ fun SettingsScreen(onBack: () -> Unit) {
                 fontFamily = skin.labelFont)
             Spacer(Modifier.height(8.dp))
             val playCtx = LocalContext.current
-            GamerTextButton(
-                onClick = {
-                    val send = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_SUBJECT, "PadMap debug log")
-                        putExtra(Intent.EXTRA_TEXT, com.slickstax841.padmap.service.PlaybackDebug.snapshot())
-                    }
-                    playCtx.startActivity(Intent.createChooser(send, "Share PadMap log"))
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
+            var eventLog by remember { mutableStateOf(com.slickstax841.padmap.service.PlaybackDebug.eventLog()) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GamerTextButton(
+                    onClick = {
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_SUBJECT, "PadMap debug log")
+                            putExtra(Intent.EXTRA_TEXT, com.slickstax841.padmap.service.PlaybackDebug.snapshot())
+                        }
+                        playCtx.startActivity(Intent.createChooser(send, "Share PadMap log"))
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
+                }
+                GamerTextButton(
+                    onClick = {
+                        com.slickstax841.padmap.service.PlaybackDebug.clear()
+                        eventLog = ""
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("CLEAR LOG", color = skin.accent, fontSize = 12.sp)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            val logScroll = rememberScrollState()
+            SelectionContainer {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(skin.surfaceCol)
+                        .border(1.dp, skin.borderUnfocused, RoundedCornerShape(8.dp))
+                        .verticalScroll(logScroll)
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        eventLog.ifBlank { "(no log entries)" },
+                        color = skin.textPrimary,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
 
         }
