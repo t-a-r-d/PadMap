@@ -62,7 +62,9 @@ private data class SetupStep(
     val instructions: String,
     val actionLabel: String,
     val onAction: () -> Unit,
-    val requiresSystemConfirmation: Boolean = false
+    val requiresSystemConfirmation: Boolean = false,
+    val systemScreen: String = "",
+    val systemInstructions: String = ""
 )
 
 @Composable
@@ -487,6 +489,7 @@ private fun SetupWizardDialog(
 ) {
     val skin = LocalAppSkin.current
     var systemConfirmationStep by remember { mutableStateOf<SetupStep?>(null) }
+    var infoStep by remember { mutableStateOf<SetupStep?>(null) }
     val injectorStartReady = hasOverlay && hasA11y && hasConnectedController &&
         wirelessDebugOn && hasPairedInjector && hasMappedGame
     val steps = buildList {
@@ -495,14 +498,18 @@ private fun SetupWizardDialog(
             "Allow PadMap to display its in-game config button over other apps.",
             "OPEN OVERLAY SETTINGS",
             onOpenOverlay,
-            requiresSystemConfirmation = true
+            requiresSystemConfirmation = true,
+            systemScreen = "Android Settings → Display over other apps → PadMap",
+            systemInstructions = "1. Find PadMap in the app list.\n2. Open PadMap.\n3. Turn on Allow display over other apps.\n4. Return to PadMap."
         ))
         if (!hasA11y) add(SetupStep(
             "Enable PadMap accessibility",
             "In Installed apps, enable PadMap. Android needs this permission to receive your controller input.",
             "OPEN ACCESSIBILITY",
             onOpenAccessibility,
-            requiresSystemConfirmation = true
+            requiresSystemConfirmation = true,
+            systemScreen = "Android Settings → Accessibility → Installed apps → PadMap",
+            systemInstructions = "1. Open Installed apps (it may be called Downloaded apps).\n2. Select PadMap.\n3. Turn on the PadMap accessibility toggle.\n4. Confirm Android's warning, then return to PadMap."
         ))
         if (!hasConnectedController) add(SetupStep(
             "Connect your controller",
@@ -515,7 +522,9 @@ private fun SetupWizardDialog(
             "Turn on Wireless debugging in Developer options and allow it on this Wi-Fi network.",
             "OPEN DEVELOPER OPTIONS",
             onOpenWirelessDebugging,
-            requiresSystemConfirmation = true
+            requiresSystemConfirmation = true,
+            systemScreen = "Android Settings → Developer options → Wireless debugging",
+            systemInstructions = "1. Turn on Wireless debugging.\n2. Accept Allow wireless debugging on this network.\n3. Keep Wireless debugging on.\n4. Return to PadMap. If Android opens Developer options instead, select Wireless debugging there."
         ))
         if (!hasPairedInjector) add(SetupStep(
             "Pair the injector",
@@ -565,7 +574,14 @@ private fun SetupWizardDialog(
             }
         },
         dismissButton = {
-            GamerTextButton(onClick = onRefresh) { Text("CHECK AGAIN", color = skin.textSecondary) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (step?.systemInstructions?.isNotBlank() == true) {
+                    GamerTextButton(onClick = { infoStep = step }) {
+                        Text("INFO", color = skin.textSecondary)
+                    }
+                }
+                GamerTextButton(onClick = onRefresh) { Text("CHECK AGAIN", color = skin.textSecondary) }
+            }
         }
     )
     systemConfirmationStep?.let { pendingStep ->
@@ -574,7 +590,7 @@ private fun SetupWizardDialog(
             title = { Text("Open Android settings", color = skin.textPrimary, fontFamily = skin.headingFont) },
             text = {
                 Text(
-                    "Android protects ${pendingStep.title.lowercase()} and only its own screen can enable it. " +
+                    "PadMap will open:\n${pendingStep.systemScreen}\n\nAndroid protects ${pendingStep.title.lowercase()} and only its own screen can enable it. " +
                         "Tap OPEN ANDROID SCREEN, make the change, then return to PadMap. The wizard checks it automatically.",
                     color = skin.textSecondary,
                     fontSize = 13.sp
@@ -590,6 +606,23 @@ private fun SetupWizardDialog(
                 GamerTextButton(onClick = { systemConfirmationStep = null }) {
                     Text("CANCEL", color = skin.textSecondary)
                 }
+            }
+        )
+    }
+    infoStep?.let { pendingStep ->
+        AlertDialog(
+            onDismissRequest = { infoStep = null },
+            title = { Text(pendingStep.title, color = skin.textPrimary, fontFamily = skin.headingFont) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("SCREEN", color = skin.accent, fontSize = 11.sp, fontFamily = skin.labelFont)
+                    Text(pendingStep.systemScreen, color = skin.textPrimary, fontSize = 13.sp)
+                    Text("WHAT TO DO", color = skin.accent, fontSize = 11.sp, fontFamily = skin.labelFont)
+                    Text(pendingStep.systemInstructions, color = skin.textSecondary, fontSize = 13.sp)
+                }
+            },
+            confirmButton = {
+                GamerTextButton(onClick = { infoStep = null }) { Text("GOT IT", color = skin.accent) }
             }
         )
     }
