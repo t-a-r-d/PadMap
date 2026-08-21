@@ -57,6 +57,13 @@ import com.slickstax841.padmap.service.PadMapAccessibilityService
 import com.slickstax841.padmap.ui.theme.*
 import java.util.UUID
 
+private data class SetupStep(
+    val title: String,
+    val instructions: String,
+    val actionLabel: String,
+    val onAction: () -> Unit
+)
+
 @Composable
 fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, onSettings: () -> Unit) {
     val ctx = LocalContext.current
@@ -68,18 +75,24 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
     var hasA11y by remember { mutableStateOf(isA11yEnabled(ctx)) }
     var hasInjector by remember { mutableStateOf(SidecarClient.isAvailable) }
     var wirelessDebugOn by remember { mutableStateOf(SidecarHost.isWirelessDebugOn(ctx)) }
+    var hasPairedInjector by remember { mutableStateOf(SidecarHost.hasPaired(ctx)) }
+    var hasConnectedController by remember { mutableStateOf(false) }
     var showSetupWizard by rememberSaveable { mutableStateOf(false) }
-    val setupNeeded = !hasOverlay || !hasA11y || !wirelessDebugOn || !hasInjector
+    val activeLayout = appData.gameLayouts.find { it.id == appData.activeLayoutId && !it.archived }
+    val hasMappedGame = activeLayout?.packageName?.isNotBlank() == true &&
+        activeLayout.mappings.isNotEmpty()
+    val setupNeeded = !hasOverlay || !hasA11y || !hasConnectedController ||
+        !wirelessDebugOn || !hasPairedInjector || !hasInjector || !hasMappedGame
     // Scan for a connected gamepad, build a preset from its reported capabilities, and save it.
     // Called on every resume so a newly connected controller is picked up automatically.
-    fun scanAndSaveController() {
+    fun scanAndSaveController(): Boolean {
         val im = ctx.getSystemService(InputManager::class.java)
         val device = im.inputDeviceIds.toList()
             .mapNotNull { InputDevice.getDevice(it) }
             .firstOrNull { d ->
                 d.sources and InputDevice.SOURCE_GAMEPAD != 0 ||
                 d.sources and InputDevice.SOURCE_JOYSTICK != 0
-            } ?: return
+            } ?: return false
 
         // Check each known button keycode against what the device reports
         val knownCodes = intArrayOf(
@@ -141,6 +154,17 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
             }
             data.copy(controllerPresets = updatedPresets, activePresetId = id)
         }
+        return true
+    }
+
+    fun refreshSetupState() {
+        hasOverlay = Settings.canDrawOverlays(ctx)
+        hasA11y = isA11yEnabled(ctx)
+        wirelessDebugOn = SidecarHost.isWirelessDebugOn(ctx)
+        hasPairedInjector = SidecarHost.hasPaired(ctx)
+        SidecarHost.bindClient(ctx)
+        hasInjector = SidecarClient.ping()
+        hasConnectedController = scanAndSaveController()
     }
 
     // Re-check permissions every time the screen resumes (user returns from Settings)
@@ -154,13 +178,8 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     Toast.makeText(ctx, "Overlay permission granted", Toast.LENGTH_SHORT).show()
                 if (newA11y && !hasA11y)
                     Toast.makeText(ctx, "Accessibility service enabled", Toast.LENGTH_SHORT).show()
-                hasOverlay = newOverlay
-                hasA11y = newA11y
-                wirelessDebugOn = SidecarHost.isWirelessDebugOn(ctx)
-                SidecarHost.bindClient(ctx)
-                hasInjector = SidecarClient.ping()
+                refreshSetupState()
                 OverlayManager.instance?.repositionForHome()
-                scanAndSaveController()
                 GameScanner.scan(ctx)
                 if (!hasInjector) {
                     scope.launch {
@@ -447,8 +466,11 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
         SetupWizardDialog(
             hasOverlay = hasOverlay,
             hasA11y = hasA11y,
+            hasConnectedController = hasConnectedController,
             wirelessDebugOn = wirelessDebugOn,
+            hasPairedInjector = hasPairedInjector,
             hasInjector = hasInjector,
+            hasMappedGame = hasMappedGame,
             onDismiss = { showSetupWizard = false },
             onOpenOverlay = {
                 ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -459,8 +481,15 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 })
             },
+            onOpenBluetooth = {
+                ctx.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+            },
             onOpenWirelessDebugging = { openWirelessDebuggingSettings(ctx) },
-            onOpenInjector = onSettings
+            onOpenInjector = onSettings,
+            onOpenGame = { showSetupWizard = false },
+            onRefresh = { refreshSetupState() }
         )
     }
 }
@@ -469,44 +498,93 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
 private fun SetupWizardDialog(
     hasOverlay: Boolean,
     hasA11y: Boolean,
+    hasConnectedController: Boolean,
     wirelessDebugOn: Boolean,
+    hasPairedInjector: Boolean,
     hasInjector: Boolean,
+    hasMappedGame: Boolean,
     onDismiss: () -> Unit,
     onOpenOverlay: () -> Unit,
     onOpenAccessibility: () -> Unit,
+    onOpenBluetooth: () -> Unit,
     onOpenWirelessDebugging: () -> Unit,
-    onOpenInjector: () -> Unit
+    onOpenInjector: () -> Unit,
+    onOpenGame: () -> Unit,
+    onRefresh: () -> Unit
 ) {
     val skin = LocalAppSkin.current
-    val step = when {
-        !hasOverlay -> Triple("1 of 4", "Allow overlay", "Open Android's PadMap overlay permission and allow it.")
-        !hasA11y -> Triple("2 of 4", "Enable accessibility", "Enable PadMap under Android's installed accessibility apps.")
-        !wirelessDebugOn -> Triple("3 of 4", "Enable Wireless debugging", "Turn it on and allow debugging on this Wi-Fi network.")
-        !hasInjector -> Triple("4 of 4", "Pair and start injector", "Pair once, then start the verified injector.")
-        else -> Triple("Ready", "PadMap is ready", "Overlay, accessibility, wireless debugging, and injector are active.")
+    val steps = buildList {
+        if (!hasOverlay) add(SetupStep(
+            "Allow overlay",
+            "Allow PadMap to display its in-game config button over other apps.",
+            "OPEN OVERLAY SETTINGS",
+            onOpenOverlay
+        ))
+        if (!hasA11y) add(SetupStep(
+            "Enable PadMap accessibility",
+            "In Installed apps, enable PadMap. Android needs this permission to receive your controller input.",
+            "OPEN ACCESSIBILITY",
+            onOpenAccessibility
+        ))
+        if (!hasConnectedController) add(SetupStep(
+            "Connect your controller",
+            "Pair or plug in the gamepad, then press a button. PadMap will detect it automatically when you return.",
+            "OPEN BLUETOOTH",
+            onOpenBluetooth
+        ))
+        if (!wirelessDebugOn) add(SetupStep(
+            "Enable Wireless debugging",
+            "Turn on Wireless debugging in Developer options and allow it on this Wi-Fi network.",
+            "OPEN DEVELOPER OPTIONS",
+            onOpenWirelessDebugging
+        ))
+        if (!hasPairedInjector) add(SetupStep(
+            "Pair the injector",
+            "Open Settings, keep the Android Pair with pairing code screen open, then use PadMap's pair pad to enter its six-digit code.",
+            "OPEN INJECTOR SETUP",
+            onOpenInjector
+        ))
+        if (hasPairedInjector && !hasInjector) add(SetupStep(
+            "Start the injector",
+            "Your phone is already paired. Open Injector setup and tap START; no pairing code is needed again.",
+            "OPEN INJECTOR SETUP",
+            onOpenInjector
+        ))
+        if (!hasMappedGame) add(SetupStep(
+            "Create your game controls",
+            "Open the game, tap PadMap's ◎ config button, add and assign your controls, then SAVE. PadMap detects the saved game layout automatically when you return.",
+            "I'LL OPEN MY GAME",
+            onOpenGame
+        ))
     }
-    val action = when {
-        !hasOverlay -> onOpenOverlay
-        !hasA11y -> onOpenAccessibility
-        !wirelessDebugOn -> onOpenWirelessDebugging
-        !hasInjector -> onOpenInjector
-        else -> onDismiss
-    }
-    val actionLabel = if (step.first == "Ready") "DONE" else "OPEN STEP"
+    val step = steps.firstOrNull()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Set up PadMap", color = skin.textPrimary, fontFamily = skin.headingFont) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(step.first, color = skin.accent, fontSize = 12.sp, fontFamily = skin.labelFont)
-                Text(step.second, color = skin.textPrimary, fontWeight = FontWeight.SemiBold)
-                Text(step.third, color = skin.textSecondary, fontSize = 13.sp)
-                Text("Return here after Android confirms each step; this wizard advances automatically.",
-                    color = skin.textSecondary, fontSize = 12.sp)
+                if (step == null) {
+                    Text("READY", color = skin.accent, fontSize = 12.sp, fontFamily = skin.labelFont)
+                    Text("PadMap is ready", color = skin.textPrimary, fontWeight = FontWeight.SemiBold)
+                    Text("Overlay, accessibility, controller, wireless debugging, injector, and a saved game layout are all detected.",
+                        color = skin.textSecondary, fontSize = 13.sp)
+                } else {
+                    Text("STEP 1 OF ${steps.size}", color = skin.accent, fontSize = 12.sp, fontFamily = skin.labelFont)
+                    Text(step.title, color = skin.textPrimary, fontWeight = FontWeight.SemiBold)
+                    Text(step.instructions, color = skin.textSecondary, fontSize = 13.sp)
+                    Text("Completed steps are skipped. Return to PadMap after each action; it checks again and advances automatically.",
+                        color = skin.textSecondary, fontSize = 12.sp)
+                }
             }
         },
-        confirmButton = { GamerTextButton(onClick = action) { Text(actionLabel, color = skin.accent) } },
-        dismissButton = { GamerTextButton(onClick = onDismiss) { Text("LATER", color = skin.textSecondary) } }
+        confirmButton = {
+            GamerTextButton(onClick = step?.onAction ?: onDismiss) {
+                Text(step?.actionLabel ?: "DONE", color = skin.accent)
+            }
+        },
+        dismissButton = {
+            GamerTextButton(onClick = onRefresh) { Text("CHECK AGAIN", color = skin.textSecondary) }
+        }
     )
 }
 
