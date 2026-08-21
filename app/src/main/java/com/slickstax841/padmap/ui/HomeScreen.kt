@@ -201,11 +201,11 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        GamerTextButton(onClick = onSettings) {
-                            Text("\u2699", fontSize = 22.sp, color = skin.textSecondary)
-                        }
                         GamerTextButton(onClick = { OverlayManager.instance?.restartIcon() }) {
                             Text("\u25CE", fontSize = 22.sp, color = skin.textSecondary)
+                        }
+                        GamerTextButton(onClick = onSettings) {
+                            Text("\u2699", fontSize = 22.sp, color = skin.textSecondary)
                         }
                         GamerTextButton(onClick = {
                             PadMapAccessibilityService.instance?.disableAndStop()
