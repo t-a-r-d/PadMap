@@ -23,6 +23,8 @@ the pinned Compose BOM provides.
 
 - [in progress] Add the two imports and Foundation Layout dependency; use the compatible
   `ButtonDefaults.textButtonColors` API. Build verification pending.
+- [in progress] 2026-08-21: remove the invalid standalone `matchParentSize` import.
+  It is a `BoxScope` member used by the existing calls; build verification pending.
 
 ---
 
