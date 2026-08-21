@@ -200,13 +200,13 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = onSettings) {
+                        GamerTextButton(onClick = onSettings) {
                             Text("\u2699", fontSize = 22.sp, color = skin.textSecondary)
                         }
-                        TextButton(onClick = { OverlayManager.instance?.restartIcon() }) {
+                        GamerTextButton(onClick = { OverlayManager.instance?.restartIcon() }) {
                             Text("\u25CE", fontSize = 22.sp, color = skin.textSecondary)
                         }
-                        TextButton(onClick = {
+                        GamerTextButton(onClick = {
                             PadMapAccessibilityService.instance?.disableAndStop()
                             (ctx as? android.app.Activity)?.finishAndRemoveTask()
                         }) {
@@ -219,7 +219,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
 
             if (setupNeeded) {
                 item {
-                    TextButton(
+                    GamerTextButton(
                         onClick = { showSetupWizard = true },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -256,7 +256,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                         fontFamily = skin.labelFont
                     )
                     if (!hasInjector) {
-                        TextButton(onClick = onSettings) {
+                        GamerTextButton(onClick = onSettings) {
                             Text("FIX", color = skin.accent, fontSize = 12.sp)
                         }
                     }
@@ -288,7 +288,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                             color = skin.textPrimary,
                             fontFamily = skin.labelFont
                         )
-                        TextButton(onClick = { openWirelessDebuggingSettings(ctx) }) {
+                        GamerTextButton(onClick = { openWirelessDebuggingSettings(ctx) }) {
                             Text("OPEN", color = skin.accent, fontSize = 12.sp)
                         }
                     }
@@ -339,7 +339,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 Spacer(Modifier.height(4.dp))
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     SectionLabel("CONTROLLERS")
-                    TextButton(onClick = {
+                    GamerTextButton(onClick = {
                         val id = UUID.randomUUID().toString()
                         DataStore.update { it.copy(controllerPresets = it.controllerPresets + ControllerPreset(id = id, name = "New Controller")) }
                         onEditPreset(id)
@@ -366,11 +366,11 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     SectionLabel("GAME LAYOUTS")
                     Row {
-                        TextButton(onClick = {
+                        GamerTextButton(onClick = {
                             val result = GameScanner.scan(ctx)
                             Toast.makeText(ctx, result.summary(), Toast.LENGTH_SHORT).show()
                         }) { Text("SCAN", color = skin.accent, fontSize = 12.sp) }
-                        TextButton(onClick = {
+                        GamerTextButton(onClick = {
                             val id = UUID.randomUUID().toString()
                             DataStore.update { it.copy(gameLayouts = it.gameLayouts + GameLayout(id = id, name = "New Game")) }
                             onEditLayout(id)
@@ -504,8 +504,8 @@ private fun SetupWizardDialog(
                     color = skin.textSecondary, fontSize = 12.sp)
             }
         },
-        confirmButton = { TextButton(onClick = action) { Text(actionLabel, color = skin.accent) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("LATER", color = skin.textSecondary) } }
+        confirmButton = { GamerTextButton(onClick = action) { Text(actionLabel, color = skin.accent) } },
+        dismissButton = { GamerTextButton(onClick = onDismiss) { Text("LATER", color = skin.textSecondary) } }
     )
 }
 
@@ -564,7 +564,7 @@ private fun PermCard(label: String, instructions: String, onFix: () -> Unit) {
                 Text("\u2715", color = Color(0xFFCC3333), fontSize = 18.sp)
                 Text(label, color = skin.textPrimary)
             }
-            TextButton(onClick = onFix) { Text("FIX", color = skin.accent, fontSize = 12.sp) }
+            GamerTextButton(onClick = onFix) { Text("FIX", color = skin.accent, fontSize = 12.sp) }
         }
         Spacer(Modifier.height(4.dp))
         Text(instructions, fontSize = 12.sp, color = skin.textSecondary, lineHeight = 18.sp)
@@ -642,8 +642,8 @@ private fun ItemCard(
             Text(subtitle, fontSize = 12.sp, color = skin.textSecondary)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (showEdit) TextButton(onClick = onEdit) { Text("EDIT", color = skin.accent, fontSize = 12.sp) }
-            TextButton(onClick = onDelete) { Text("\u2715", color = Color(0xFFCC3333), fontSize = 14.sp) }
+            if (showEdit) GamerTextButton(onClick = onEdit) { Text("EDIT", color = skin.accent, fontSize = 12.sp) }
+            GamerTextButton(onClick = onDelete) { Text("\u2715", color = Color(0xFFCC3333), fontSize = 14.sp) }
         }
     }
 }

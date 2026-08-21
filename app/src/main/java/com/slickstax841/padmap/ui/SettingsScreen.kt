@@ -49,7 +49,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .padding(16.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("\u2190", color = skin.accent, fontSize = 20.sp) }
+            GamerTextButton(onClick = onBack) { Text("\u2190", color = skin.accent, fontSize = 20.sp) }
                 Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = skin.textPrimary,
                     fontFamily = skin.headingFont)
             }
@@ -75,7 +75,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 fontFamily = skin.labelFont)
             Spacer(Modifier.height(8.dp))
             val playCtx = LocalContext.current
-            TextButton(
+            GamerTextButton(
                 onClick = {
                     val send = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
@@ -170,15 +170,15 @@ private fun InjectorCard(skin: AppSkin) {
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (!paired) {
-                TextButton(onClick = { PairOverlay.show(ctx) }) {
+                GamerTextButton(onClick = { PairOverlay.show(ctx) }) {
                     Text("SHOW PAIR PAD", color = skin.accent, fontSize = 12.sp)
                 }
             }
-            TextButton(onClick = { openDeveloper() }) {
+            GamerTextButton(onClick = { openDeveloper() }) {
                 Text("OPEN DEVELOPER", color = skin.accent, fontSize = 12.sp)
             }
             if (paired) {
-                TextButton(
+                GamerTextButton(
                     enabled = !busy,
                     onClick = {
                         busy = true
@@ -200,7 +200,7 @@ private fun InjectorCard(skin: AppSkin) {
                     }
                 ) { Text(if (busy) "WORKING…" else "START", color = skin.accent, fontSize = 12.sp) }
             } else {
-                TextButton(
+                GamerTextButton(
                     enabled = !busy && code.length == 6,
                     onClick = {
                         busy = true

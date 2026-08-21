@@ -2,18 +2,26 @@ package com.slickstax841.padmap.ui.theme
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextButtonDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.slickstax841.padmap.R
 
 // Horizontal scanline overlay — no-op when skin.showScanlines is false
 @Composable
@@ -83,8 +91,40 @@ fun SkinBackground(
 ) {
     val skin = LocalAppSkin.current
     Box(modifier = modifier.background(skin.bgDark)) {
+        Image(
+            painter = painterResource(R.drawable.mplayer_bg),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.matchParentSize()
+        )
+        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.32f)))
         PulsingGridBackground(Modifier.matchParentSize())
         content()
         ScanlineOverlay(Modifier.matchParentSize())
     }
+}
+
+/** Shared neon-framed action treatment for every Compose screen. */
+@Composable
+fun GamerTextButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit
+) {
+    val skin = LocalAppSkin.current
+    val shape = RoundedCornerShape(10.dp)
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .clip(shape)
+            .background(skin.surfaceVar.copy(alpha = 0.88f))
+            .border(1.dp, skin.accent.copy(alpha = if (enabled) 0.72f else 0.24f), shape),
+        colors = TextButtonDefaults.textButtonColors(
+            contentColor = skin.accent,
+            disabledContentColor = skin.textSecondary.copy(alpha = 0.55f)
+        ),
+        content = content
+    )
 }

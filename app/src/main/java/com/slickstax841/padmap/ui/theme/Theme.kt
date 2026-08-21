@@ -2,7 +2,9 @@ package com.slickstax841.padmap.ui.theme
 
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import com.slickstax841.padmap.data.DataStore
 
 // Legacy constants — kept so OverlayManager (View-based) can continue to reference them
@@ -30,7 +32,14 @@ fun PadMapTheme(content: @Composable () -> Unit) {
         outline          = skin.borderUnfocused
     )
 
+    val gamerShapes = Shapes(
+        extraSmall = RoundedCornerShape(6.dp),
+        small = RoundedCornerShape(10.dp),
+        medium = RoundedCornerShape(12.dp),
+        large = RoundedCornerShape(16.dp)
+    )
+
     CompositionLocalProvider(LocalAppSkin provides skin) {
-        MaterialTheme(colorScheme = scheme, content = content)
+        MaterialTheme(colorScheme = scheme, shapes = gamerShapes, content = content)
     }
 }

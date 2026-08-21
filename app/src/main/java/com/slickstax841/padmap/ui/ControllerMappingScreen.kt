@@ -132,7 +132,7 @@ fun ControllerMappingScreen(presetId: String, onBack: () -> Unit) {
     SkinBackground(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("\u2190", color = skin.accent, fontSize = 20.sp) }
+                GamerTextButton(onClick = onBack) { Text("\u2190", color = skin.accent, fontSize = 20.sp) }
                 Text("Controller Preset", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = skin.textPrimary,
                     fontFamily = skin.headingFont)
             }
@@ -144,7 +144,7 @@ fun ControllerMappingScreen(presetId: String, onBack: () -> Unit) {
                     Text("Device (auto-detection)", fontSize = 12.sp, color = skin.textSecondary)
                     Text(deviceName.ifBlank { "Not set" }, color = if (deviceName.isBlank()) skin.textSecondary else skin.accent, fontSize = 13.sp)
                 }
-                TextButton(onClick = { capturingDevice = true }) {
+                GamerTextButton(onClick = { capturingDevice = true }) {
                     Text(if (capturingDevice) "PRESS ANY BUTTON..." else "CAPTURE DEVICE", color = skin.accent, fontSize = 11.sp)
                 }
             }
@@ -165,7 +165,7 @@ fun ControllerMappingScreen(presetId: String, onBack: () -> Unit) {
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                                 keyboardActions = KeyboardActions(onDone = { captured[i] = item.copy(label = editLabel); editingIndex = -1 }),
                                 colors = tfColors(), modifier = Modifier.weight(1f))
-                            TextButton(onClick = { captured[i] = item.copy(label = editLabel); editingIndex = -1 }) { Text("OK", color = skin.accent) }
+                            GamerTextButton(onClick = { captured[i] = item.copy(label = editLabel); editingIndex = -1 }) { Text("OK", color = skin.accent) }
                         }
                     } else {
                         val isActive = (item.code to item.isAxis) in activeInputs

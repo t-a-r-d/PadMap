@@ -40,7 +40,7 @@ fun GameLayoutScreen(layoutId: String, onBack: () -> Unit) {
     SkinBackground(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { save(); onBack() }) { Text("\u2190", color = skin.accent, fontSize = 20.sp) }
+                GamerTextButton(onClick = { save(); onBack() }) { Text("\u2190", color = skin.accent, fontSize = 20.sp) }
                 Text("Game Layout", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = skin.textPrimary,
                     fontFamily = skin.headingFont)
             }
