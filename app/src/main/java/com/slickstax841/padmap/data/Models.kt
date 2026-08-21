@@ -19,7 +19,10 @@ data class LayerBind(
     val activateName: String = "",
     val deactivateName: String = "",
     // 0 = layer that was active before this one opened (in-game menu close).
-    val returnLayer: Int = 0
+    val returnLayer: Int = 0,
+    // Keeps this layer's mapped controls visible over the game. Disabled by default
+    // so existing layouts and normal gameplay remain uncluttered.
+    val showZonesInGame: Boolean = false
 )
 
 @Serializable

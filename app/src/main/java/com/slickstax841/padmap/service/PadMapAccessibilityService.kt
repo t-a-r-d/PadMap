@@ -358,6 +358,8 @@ class PadMapAccessibilityService : AccessibilityService() {
     private fun layerMappings(layout: GameLayout) =
         layout.mappings.filter { layerOf(it) == activeLayer }
 
+    fun currentPlaybackLayer(): Int = activeLayer
+
     private fun switchLayer(n: Int) {
         val next = n.coerceIn(1, 6)
         if (next == activeLayer) return
@@ -373,6 +375,7 @@ class PadMapAccessibilityService : AccessibilityService() {
         activeLayer = next
         PlaybackDebug.log("layer $activeLayer")
         updateInputInterception()
+        OverlayManager.instance?.refreshPlayZonePreview(activeLayer)
         syncIconPassThrough()
     }
 

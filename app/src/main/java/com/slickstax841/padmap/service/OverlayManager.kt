@@ -110,6 +110,20 @@ class OverlayManager(private val context: Context) {
         PixelFormat.TRANSLUCENT
     ).apply { gravity = Gravity.TOP or Gravity.START }
 
+    // Visual-only controls for layers that opt in to being shown during play.
+    // This window must never receive touches; the game stays the touch target.
+    private var playZonePreview: PlayZonePreviewView? = null
+    private var playZoneGamePackage = ""
+    private val playZoneParams = WindowManager.LayoutParams(
+        WindowManager.LayoutParams.MATCH_PARENT,
+        WindowManager.LayoutParams.MATCH_PARENT,
+        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+        PixelFormat.TRANSLUCENT
+    )
+
     // ─── Config overlay ───────────────────────────────────────────────────────
 
     private var configRoot: FrameLayout? = null
@@ -121,6 +135,7 @@ class OverlayManager(private val context: Context) {
     private var layerActView: TextView? = null
     private var layerDeactView: TextView? = null
     private var layerRetView: TextView? = null
+    private var layerVisibilityView: TextView? = null
     private var overlayModeRow: LinearLayout? = null
     private var adjustMode = false
     private var adjustLayer: View? = null
@@ -322,6 +337,8 @@ class OverlayManager(private val context: Context) {
     fun repositionForHome() {
         handler.post {
             iconView?.visibility = View.GONE
+            playZoneGamePackage = ""
+            hidePlayZonePreview()
             hidePlayCatcher()
         }
     }
@@ -341,12 +358,17 @@ class OverlayManager(private val context: Context) {
             val view = iconView ?: return@post
             if (!com.slickstax841.padmap.data.GameScanner.isInstalledGame(context, pkg)) {
                 view.visibility = View.GONE
+                playZoneGamePackage = ""
+                hidePlayZonePreview()
                 hidePlayCatcher()
                 return@post
             }
+            playZoneGamePackage = pkg
             view.visibility = View.VISIBLE
             applyIconForGame(pkg)
             handler.postDelayed({ applyIconForGame(pkg) }, 400)
+            refreshPlayZonePreview()
+            handler.postDelayed({ refreshPlayZonePreview() }, 180)
         }
     }
 
@@ -362,7 +384,7 @@ class OverlayManager(private val context: Context) {
     // Open config overlay directly from HomeScreen — uses last known foreground package
     fun openConfigDirect() { handler.post { enterConfigModeFromIcon() } }
 
-    fun detach() { handler.post { hidePlayCatcher(); removeIcon(); removeConfig(); removeAllDebugViews() } }
+    fun detach() { handler.post { hidePlayZonePreview(); hidePlayCatcher(); removeIcon(); removeConfig(); removeAllDebugViews() } }
 
     fun showToast(msg: String) {
         handler.post { Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
@@ -568,6 +590,7 @@ class OverlayManager(private val context: Context) {
     private fun enterConfigMode() {
         PlaybackDebug.log("overlay CONFIG")
         state = State.CONFIG
+        hidePlayZonePreview()
         hidePlayCatcher()
         iconView?.visibility = View.GONE
         buildConfigOverlay()
@@ -593,12 +616,15 @@ class OverlayManager(private val context: Context) {
             if (gamePackage.isNotBlank()) applyIconForGame(gamePackage)
             PadMapAccessibilityService.instance?.restoreGamePackage(gamePackage)
             configGamePackage = ""
+            if (gamePackage.isNotBlank()) playZoneGamePackage = gamePackage
+            refreshPlayZonePreview()
         }
     }
 
     private fun closeAndDisableIcon() {
         state = State.FLOATING
         pendingZoneId = null
+        hidePlayZonePreview()
         removeConfig()
         removeIcon()
         showToast("Open PadMap to show the config button again")
@@ -1004,6 +1030,20 @@ class OverlayManager(private val context: Context) {
             cycleReturnLayer()
         }
         dock.addView(slots)
+        layerVisibilityView = TextView(context).apply {
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(7), dp(8), dp(7))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) }
+            setOnClickListener {
+                updateEditingBind { it.copy(showZonesInGame = !it.showZonesInGame) }
+                refreshLayersDock()
+            }
+        }
+        dock.addView(layerVisibilityView)
         refreshLayersDock()
         return dock
     }
@@ -1071,6 +1111,16 @@ class OverlayManager(private val context: Context) {
         )
         val ret = bind?.returnLayer ?: 0
         paint(layerRetView, if (ret in 1..6) ret.toString() else "PREV", false)
+        val showInGame = bind?.showZonesInGame == true
+        layerVisibilityView?.apply {
+            text = if (showInGame) "CONTROLS VISIBLE IN GAME" else "SHOW CONTROLS IN GAME"
+            setTextColor(if (showInGame) Color.BLACK else Color.parseColor("#00BFFF"))
+            background = GradientDrawable().apply {
+                setColor(if (showInGame) Color.parseColor("#00BFFF") else Color.parseColor("#222222"))
+                setStroke(dp(1), Color.parseColor("#00BFFF"))
+                cornerRadius = dp(5).toFloat()
+            }
+        }
     }
 
     private fun buildDebugBox(): View {
@@ -1454,7 +1504,7 @@ class OverlayManager(private val context: Context) {
         configRoot = null; zoneLayer = null; zoneViews.clear(); contextMenuViews.clear()
         keyCatcher = null; adjustLayer = null; adjustMode = false; configPanel = null
         layersDock = null; layerCapture = null; overlayModeRow = null
-        layerActView = null; layerDeactView = null; layerRetView = null
+        layerActView = null; layerDeactView = null; layerRetView = null; layerVisibilityView = null
         for (i in layerNumViews.indices) layerNumViews[i] = null
         debugLogView = null; debugBox = null
     }
@@ -1771,6 +1821,38 @@ class OverlayManager(private val context: Context) {
         // game's first window focus and hangs splash (BUG-008).
     }
 
+    /** Refreshes the non-interactive control labels after a layer change. */
+    fun refreshPlayZonePreview(layer: Int = PadMapAccessibilityService.instance?.currentPlaybackLayer() ?: 1) {
+        handler.post {
+            val layout = DataStore.activeLayout
+            val enabled = state == State.FLOATING && playZoneGamePackage.isNotBlank() &&
+                layout?.resolvedBinds()?.firstOrNull { it.index == layer }?.showZonesInGame == true
+            val entries = layout?.mappings.orEmpty().filter {
+                it.layer.coerceIn(1, 6) == layer && it.inputName.isNotBlank() && it.parentZoneId.isBlank()
+            }
+            if (!enabled || entries.isEmpty()) {
+                hidePlayZonePreview()
+                return@post
+            }
+            val preview = playZonePreview
+            if (preview == null) {
+                PlayZonePreviewView(context, entries).also {
+                    playZonePreview = it
+                    runCatching { wm.addView(it, playZoneParams) }
+                        .onFailure { playZonePreview = null }
+                }
+            } else {
+                preview.entries = entries
+                preview.invalidate()
+            }
+        }
+    }
+
+    private fun hidePlayZonePreview() {
+        playZonePreview?.let { runCatching { wm.removeView(it) } }
+        playZonePreview = null
+    }
+
     private fun hidePlayCatcher() {
         playCatcher?.let { runCatching { wm.removeView(it) } }
         playCatcher = null
@@ -1926,6 +2008,71 @@ class OverlayManager(private val context: Context) {
         else -> "Axis$axis"
     }
 
+    private fun controlColor(label: String): Int = when (label.uppercase()) {
+        "A" -> Color.rgb(87, 214, 105)
+        "B" -> Color.rgb(231, 78, 78)
+        "X" -> Color.rgb(65, 148, 255)
+        "Y" -> Color.rgb(242, 203, 62)
+        "LB", "RB", "L1", "R1" -> Color.rgb(177, 119, 255)
+        "LT", "RT", "L2", "R2" -> Color.rgb(255, 145, 65)
+        "START", "SELECT", "BACK", "MENU", "HOME" -> Color.rgb(190, 205, 220)
+        "UP", "DOWN", "LEFT", "RIGHT", "D-UP", "D-DOWN", "D-LEFT", "D-RIGHT", "D-PAD", "DPAD" -> Color.rgb(130, 154, 177)
+        else -> Color.rgb(74, 176, 234)
+    }
+
+    /** Drawn in a non-touchable window above the game; it is not an input surface. */
+    private inner class PlayZonePreviewView(
+        ctx: Context,
+        var entries: List<MappingEntry>
+    ) : View(ctx) {
+        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            entries.forEach { entry ->
+                when (val action = entry.action) {
+                    is TouchAction.Tap -> drawButton(canvas, entry.inputName, action.x, action.y, action.radius)
+                    is TouchAction.Drag -> drawStick(canvas, entry.inputName, action.centerX, action.centerY, action.radius)
+                }
+            }
+        }
+
+        private fun drawButton(canvas: Canvas, label: String, x: Float, y: Float, radius: Float) {
+            val color = controlColor(label)
+            fill.color = Color.argb(70, Color.red(color), Color.green(color), Color.blue(color))
+            canvas.drawCircle(x, y, radius, fill)
+            outline.color = Color.argb(210, Color.red(color), Color.green(color), Color.blue(color))
+            outline.strokeWidth = dp(2).toFloat()
+            canvas.drawCircle(x, y, radius, outline)
+            outline.color = Color.argb(125, 255, 255, 255)
+            outline.strokeWidth = dp(1).toFloat()
+            canvas.drawCircle(x, y - radius * .08f, radius * .78f, outline)
+            fill.color = Color.argb(52, 255, 255, 255)
+            canvas.drawOval(x - radius * .56f, y - radius * .7f, x + radius * .18f, y - radius * .24f, fill)
+            text.textSize = if (label.length > 4) radius * .42f else radius * .62f
+            canvas.drawText(label, x, y + text.textSize * .34f, text)
+        }
+
+        private fun drawStick(canvas: Canvas, label: String, x: Float, y: Float, radius: Float) {
+            val color = controlColor(label)
+            fill.color = Color.argb(40, Color.red(color), Color.green(color), Color.blue(color))
+            canvas.drawCircle(x, y, radius, fill)
+            outline.color = Color.argb(185, Color.red(color), Color.green(color), Color.blue(color))
+            outline.strokeWidth = dp(2).toFloat()
+            canvas.drawCircle(x, y, radius, outline)
+            fill.color = Color.argb(90, 255, 255, 255)
+            canvas.drawCircle(x, y, radius * .3f, fill)
+            outline.color = Color.argb(125, 255, 255, 255)
+            outline.strokeWidth = dp(1).toFloat()
+            canvas.drawCircle(x, y, radius * .3f, outline)
+            text.textSize = radius * .25f
+            canvas.drawText(label, x, y + radius + text.textSize * 1.15f, text)
+        }
+    }
+
     // ─── Zone circle view ─────────────────────────────────────────────────────
 
     @SuppressLint("ViewConstructor")
@@ -2046,6 +2193,28 @@ class OverlayManager(private val context: Context) {
             glowPaint.alpha = 255
         }
 
+        private fun drawGlassControl(canvas: Canvas, cx: Float, cy: Float, radius: Float, color: Int) {
+            fillPaint.shader = RadialGradient(
+                cx - radius * .28f, cy - radius * .34f, radius * 1.25f,
+                intArrayOf(
+                    Color.argb(145, 255, 255, 255),
+                    Color.argb(94, Color.red(color), Color.green(color), Color.blue(color)),
+                    Color.argb(54, Color.red(color), Color.green(color), Color.blue(color))
+                ),
+                floatArrayOf(0f, .22f, 1f), Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(cx, cy, radius, fillPaint)
+            fillPaint.shader = null
+            strokePaint.color = Color.argb(238, Color.red(color), Color.green(color), Color.blue(color))
+            strokePaint.strokeWidth = dp(2).toFloat()
+            canvas.drawCircle(cx, cy, radius, strokePaint)
+            strokePaint.color = Color.argb(150, 255, 255, 255)
+            strokePaint.strokeWidth = dp(1).toFloat()
+            canvas.drawCircle(cx, cy - radius * .07f, radius * .78f, strokePaint)
+            fillPaint.color = Color.argb(75, 255, 255, 255)
+            canvas.drawOval(cx - radius * .56f, cy - radius * .7f, cx + radius * .16f, cy - radius * .25f, fillPaint)
+        }
+
         override fun onDraw(canvas: Canvas) {
             val cx = width / 2f; val cy = height / 2f
             if (!zone.isPlaced) {
@@ -2059,14 +2228,16 @@ class OverlayManager(private val context: Context) {
                     fillPaint.color = Color.argb(200, 255, 140, 0)
                     strokePaint.color = glowAccent
                     strokePaint.strokeWidth = 5f
+                    canvas.drawCircle(cx, cy, zone.innerRadius, fillPaint)
+                    canvas.drawCircle(cx, cy, zone.innerRadius, strokePaint)
                 } else {
-                    fillPaint.color = Color.argb(150, 0, 191, 255)
-                    strokePaint.color = Color.parseColor("#00BFFF")
-                    strokePaint.strokeWidth = 3f
+                    drawGlassControl(canvas, cx, cy, zone.innerRadius, controlColor(zone.inputName))
                 }
-                canvas.drawCircle(cx, cy, zone.innerRadius, fillPaint)
-                canvas.drawCircle(cx, cy, zone.innerRadius, strokePaint)
                 if (zone.isStick) {
+                    val stickColor = controlColor(zone.inputName)
+                    outerPaint.color = Color.argb(210, Color.red(stickColor), Color.green(stickColor), Color.blue(stickColor))
+                    deadZonePaint.color = Color.argb(185, Color.red(stickColor), Color.green(stickColor), Color.blue(stickColor))
+                    handlePaint.color = Color.argb(190, Color.red(stickColor), Color.green(stickColor), Color.blue(stickColor))
                     canvas.drawCircle(cx, cy, zone.outerRadius, outerPaint)
                     canvas.drawCircle(cx, cy, zone.deadZone * zone.outerRadius, deadZonePaint)
                     val ang = handleAngle()
