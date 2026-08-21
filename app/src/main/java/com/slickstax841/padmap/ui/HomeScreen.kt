@@ -204,14 +204,17 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = onSettings) {
+                            Text("\u2699", fontSize = 22.sp, color = skin.textSecondary)
+                        }
+                        TextButton(onClick = { OverlayManager.instance?.restartIcon() }) {
+                            Text("\u25CE", fontSize = 22.sp, color = skin.textSecondary)
+                        }
                         TextButton(onClick = {
                             PadMapAccessibilityService.instance?.disableAndStop()
                             (ctx as? android.app.Activity)?.finishAndRemoveTask()
                         }) {
                             Text("EXIT", color = skin.textSecondary, fontSize = 11.sp)
-                        }
-                        TextButton(onClick = onSettings) {
-                            Text("\u2699", fontSize = 22.sp, color = skin.textSecondary)
                         }
                     }
                 }
@@ -273,23 +276,6 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                             Text("OPEN", color = skin.accent, fontSize = 12.sp)
                         }
                     }
-                }
-            }
-
-            // Always show overlay restore button once permissions are granted —
-            // the config icon can disappear from the game screen and this is the only way back
-            if (hasOverlay && hasA11y) {
-                item {
-                    TextButton(
-                        onClick = { OverlayManager.instance?.restartIcon() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(skin.activeItemBg)
-                    ) {
-                        Text("\u25CE  Show overlay config button", color = skin.accent, fontSize = 13.sp)
-                    }
-                    Spacer(Modifier.height(4.dp))
                 }
             }
 
