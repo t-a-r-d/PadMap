@@ -7,7 +7,7 @@ CC reads this before investigating any bug.
 
 ## BUG-031 — v78 Kotlin compilation fails after gamer styling
 
-**Status:** fix in progress
+**Status:** fixed — v78 build verified
 **Reported:** 2026-08-21
 
 `assembleDebug` fails in `:app:compileDebugKotlin` with unresolved references for
@@ -25,6 +25,7 @@ the pinned Compose BOM provides.
   `ButtonDefaults.textButtonColors` API. Build verification pending.
 - [in progress] 2026-08-21: remove the invalid standalone `matchParentSize` import.
   It is a `BoxScope` member used by the existing calls; build verification pending.
+- [ok] 2026-08-21: v78 `assembleDebug` completed successfully after the import removal.
 
 ---
 
