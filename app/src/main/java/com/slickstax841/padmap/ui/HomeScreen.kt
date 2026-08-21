@@ -67,9 +67,6 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
     var hasA11y by remember { mutableStateOf(isA11yEnabled(ctx)) }
     var hasInjector by remember { mutableStateOf(SidecarClient.isAvailable) }
     var wirelessDebugOn by remember { mutableStateOf(SidecarHost.isWirelessDebugOn(ctx)) }
-    var injectorNote by remember {
-        mutableStateOf(if (SidecarClient.isAvailable) "Injector running" else "Injector not running")
-    }
     // Scan for a connected gamepad, build a preset from its reported capabilities, and save it.
     // Called on every resume so a newly connected controller is picked up automatically.
     fun scanAndSaveController() {
@@ -162,15 +159,12 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                 OverlayManager.instance?.repositionForHome()
                 scanAndSaveController()
                 GameScanner.scan(ctx)
-                if (hasInjector) {
-                    injectorNote = "Injector running"
-                } else {
+                if (!hasInjector) {
                     scope.launch {
                         val result = withContext(Dispatchers.IO) {
                             runCatching { SidecarHost.ensureRunning(ctx) }
                         }
                         hasInjector = result.getOrDefault(false) || SidecarClient.isAvailable
-                        injectorNote = if (hasInjector) "Injector running" else "Injector not running"
                         result.exceptionOrNull()?.let {
                             Toast.makeText(ctx, "Injector failed — open Settings for the log", Toast.LENGTH_SHORT).show()
                         }
@@ -239,11 +233,17 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     Spacer(Modifier.width(10.dp))
                     Text(
                         if (hasInjector) "Injector running" else "Injector not running",
+                        modifier = Modifier.weight(1f),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = skin.textPrimary,
                         fontFamily = skin.labelFont
                     )
+                    if (!hasInjector) {
+                        TextButton(onClick = onSettings) {
+                            Text("FIX", color = skin.accent, fontSize = 12.sp)
+                        }
+                    }
                 }
             }
 
@@ -276,21 +276,6 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                             Text("OPEN", color = skin.accent, fontSize = 12.sp)
                         }
                     }
-                }
-            }
-
-            if (hasOverlay && hasA11y && !hasInjector) {
-                item {
-                    SectionLabel("INJECTOR")
-                    Spacer(Modifier.height(6.dp))
-                    PermCard(
-                        label = injectorNote,
-                        instructions = if (!SidecarHost.hasPaired(ctx))
-                            "First time: Settings \u2192 OPEN DEVELOPER. Stay on Pair with pairing code and use the top bar."
-                        else
-                            "PadMap already paired. Open Settings for the log and START."
-                    ) { onSettings() }
-                    Spacer(Modifier.height(8.dp))
                 }
             }
 
