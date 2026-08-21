@@ -66,6 +66,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
     var hasOverlay by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
     var hasA11y by remember { mutableStateOf(isA11yEnabled(ctx)) }
     var hasInjector by remember { mutableStateOf(SidecarClient.isAvailable) }
+    var wirelessDebugOn by remember { mutableStateOf(SidecarHost.isWirelessDebugOn(ctx)) }
     var injectorNote by remember {
         mutableStateOf(if (SidecarClient.isAvailable) "Injector running" else "Injector not running")
     }
@@ -155,6 +156,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                     Toast.makeText(ctx, "Accessibility service enabled", Toast.LENGTH_SHORT).show()
                 hasOverlay = newOverlay
                 hasA11y = newA11y
+                wirelessDebugOn = SidecarHost.isWirelessDebugOn(ctx)
                 SidecarHost.bindClient(ctx)
                 hasInjector = SidecarClient.ping()
                 OverlayManager.instance?.repositionForHome()
@@ -239,6 +241,38 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                         color = skin.textPrimary,
                         fontFamily = skin.labelFont
                     )
+                }
+            }
+
+            if (!wirelessDebugOn) {
+                item {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(skin.surfaceCol)
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(RoundedCornerShape(5.dp))
+                                .background(Color(0xFFDD3333))
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            "Wireless debugging mode off",
+                            modifier = Modifier.weight(1f),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = skin.textPrimary,
+                            fontFamily = skin.labelFont
+                        )
+                        TextButton(onClick = { openWirelessDebuggingSettings(ctx) }) {
+                            Text("OPEN", color = skin.accent, fontSize = 12.sp)
+                        }
+                    }
                 }
             }
 
@@ -426,6 +460,19 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
 @Composable private fun SectionLabel(text: String) {
     val skin = LocalAppSkin.current
     Text(text, fontSize = 11.sp, color = skin.textSecondary, letterSpacing = 2.sp, fontFamily = skin.labelFont)
+}
+
+/**
+ * Android exposes no stable public intent for the Wireless debugging sub-page.
+ * Try an OEM-provided direct action first, then use the supported Developer
+ * options action instead of sending the player to general Wi-Fi settings.
+ */
+private fun openWirelessDebuggingSettings(ctx: Context) {
+    val direct = Intent("android.settings.WIRELESS_DEBUGGING_SETTINGS")
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    val fallback = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    ctx.startActivity(if (direct.resolveActivity(ctx.packageManager) != null) direct else fallback)
 }
 
 internal fun bestInjectorLog(preferred: String?): String {
