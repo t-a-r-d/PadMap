@@ -485,6 +485,8 @@ private fun SetupWizardDialog(
     onRefresh: () -> Unit
 ) {
     val skin = LocalAppSkin.current
+    val injectorStartReady = hasOverlay && hasA11y && hasConnectedController &&
+        wirelessDebugOn && hasPairedInjector && hasMappedGame
     val steps = buildList {
         if (!hasOverlay) add(SetupStep(
             "Allow overlay",
@@ -516,17 +518,17 @@ private fun SetupWizardDialog(
             "SHOW INJECTOR SETUP",
             onOpenInjector
         ))
-        if (hasPairedInjector && !hasInjector) add(SetupStep(
-            "Start the injector",
-            "Close this wizard and tap START in the injector card at the top of Home; no pairing code is needed again.",
-            "SHOW INJECTOR START",
-            onOpenInjector
-        ))
         if (!hasMappedGame) add(SetupStep(
             "Create your game controls",
             "Open the game, tap PadMap's ◎ config button, add and assign your controls, then SAVE. PadMap detects the saved game layout automatically when you return.",
             "I'LL OPEN MY GAME",
             onOpenGame
+        ))
+        if (injectorStartReady && !hasInjector) add(SetupStep(
+            "Start the injector",
+            "All other setup is detected. Close this wizard and tap START in the injector card at the top of Home; no pairing code is needed again.",
+            "SHOW INJECTOR START",
+            onOpenInjector
         ))
     }
     val step = steps.firstOrNull()
