@@ -71,7 +71,7 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             Spacer(Modifier.height(32.dp))
 
-            Text("PLAYBACK LOG", fontSize = 11.sp, color = skin.textSecondary, letterSpacing = 2.sp,
+            Text("DEBUG LOG", fontSize = 11.sp, color = skin.textSecondary, letterSpacing = 2.sp,
                 fontFamily = skin.labelFont)
             Spacer(Modifier.height(8.dp))
             val playCtx = LocalContext.current
@@ -79,14 +79,14 @@ fun SettingsScreen(onBack: () -> Unit) {
                 onClick = {
                     val send = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
-                        putExtra(Intent.EXTRA_SUBJECT, "PadMap playback debug")
+                        putExtra(Intent.EXTRA_SUBJECT, "PadMap debug log")
                         putExtra(Intent.EXTRA_TEXT, com.slickstax841.padmap.service.PlaybackDebug.snapshot())
                     }
-                    playCtx.startActivity(Intent.createChooser(send, "Share playback debug"))
+                    playCtx.startActivity(Intent.createChooser(send, "Share PadMap log"))
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("SHARE PLAYBACK", color = skin.accent, fontSize = 12.sp)
+                Text("SHARE LOG", color = skin.accent, fontSize = 12.sp)
             }
 
             Spacer(Modifier.height(24.dp))

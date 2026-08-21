@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import com.slickstax841.padmap.data.DataStore
 import com.slickstax841.padmap.inject.SidecarClient
+import com.slickstax841.padmap.inject.SidecarHost
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
@@ -87,6 +88,11 @@ object PlaybackDebug {
             appendLine(
                 "injector available=${SidecarClient.isAvailable} ping=${SidecarClient.ping()} err=${SidecarClient.lastError}"
             )
+            appendLine("injectorStatus=${SidecarHost.status}")
+            if (SidecarHost.lastDump.isNotBlank()) {
+                appendLine("injectorDump:")
+                appendLine(SidecarHost.lastDump)
+            }
             appendLine(
                 "uiVisible=${svc?.padMapUiVisible} fg=${svc?.foregroundPackage} " +
                     "play=${svc?.playingPackageDebug} lastGame=${svc?.lastGamePackage} " +
