@@ -1,6 +1,6 @@
 # PadMap — project-specific
 
-**SHELVED.** Do not read this file unless Damien opened `~/appProjects/PadMap/` this session.
+**SHELVED.** Do not read this file unless Damien **names** PadMap this session.
 Global rules: `~/PROJECT_RULES.md`. Shared board: `~/PROJECT_LOG.md`.
 
 ## Overview
