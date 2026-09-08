@@ -2,6 +2,7 @@
 
 **SHELVED.** Do not read this file unless Damien **names** PadMap this session.
 Global rules: `~/PROJECT_RULES.md`. Shared board: `~/PROJECT_LOG.md`.
+Phase 2: this file + git only. Other files only when that slice needs them.
 
 ## Overview
 
