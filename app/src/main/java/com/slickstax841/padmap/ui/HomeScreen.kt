@@ -45,6 +45,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.slickstax841.padmap.BuildConfig
 import com.slickstax841.padmap.R
 import com.slickstax841.padmap.data.ControllerPreset
 import com.slickstax841.padmap.data.DataStore
@@ -217,7 +218,7 @@ fun HomeScreen(onEditPreset: (String) -> Unit, onEditLayout: (String) -> Unit, o
                         )
                         Spacer(Modifier.width(10.dp))
                         Column {
-                            Text("PAD MAP", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = skin.accent,
+                            Text("PAD MAP v${BuildConfig.VERSION_CODE}", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = skin.accent,
                                 letterSpacing = 4.sp, fontFamily = skin.headingFont)
                             Text("gamepad \u2192 touch mapper", fontSize = 12.sp, color = skin.textSecondary)
                         }
